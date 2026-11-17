@@ -6994,6 +6994,18 @@ function M._usteer_filter_resync()
 	return true
 end
 
+-- Once a minute: restart usteerd if it stopped answering (usteer.watchdog).
+M.USTEER_WATCHDOG_INTERVAL = 60
+M._usteer_watchdog_next = 0
+function M._usteer_watchdog_tick()
+	local u = M._usteer
+	if not (u and u.watchdog) then return false end
+	local now = M._time()
+	if now < M._usteer_watchdog_next then return false end
+	M._usteer_watchdog_next = now + M.USTEER_WATCHDOG_INTERVAL
+	return u.watchdog()
+end
+
 -- ─── The controller's scheduled neighbour scan ──────────────────────────────
 
 -- Opt-in background neighbour scan (conf.lua neighbour_scan_interval, in
@@ -8286,6 +8298,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._meshvlan_resync, st, cfg)
 	pcall(M._hairpin_resync)
 	pcall(M._usteer_filter_resync)
+	pcall(M._usteer_watchdog_tick)
 	pcall(M._block_resync, st)
 	pcall(M._sched_resync, st)
 	pcall(M._rrbguard_tick)

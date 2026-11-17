@@ -232,4 +232,39 @@ return {
 			end)
 		end
 	},
+	{
+		name = "usteer: watchdog restarts a daemon that stops answering, after two misses",
+		fn = function()
+			with_usteer(function(db, cmds)
+				local origerr = io.stderr
+				io.stderr = {write = function() end}
+				usteer.set_enabled(true, nil, false)
+				usteer._unanswered = 0
+				local answer = 0
+				local run = usteer._run_cmd
+				usteer._run_cmd = function(cmd)
+					if cmd:find("ubus", 1, true) then return answer end
+					return run(cmd)
+				end
+				local before = #cmds
+				local healthy = usteer.watchdog()
+				answer = 1   -- 5.1's os.execute: a truthy failure
+				local first = usteer.watchdog()
+				local second = usteer.watchdog()
+				local restarts = 0
+				for i = before + 1, #cmds do
+					if cmds[i]:find("usteer restart", 1, true) then restarts = restarts + 1 end
+				end
+				usteer.set_enabled(false, nil, false)
+				local off = usteer.watchdog()
+				usteer._run_cmd = run
+				io.stderr = origerr
+				assert_false(healthy, "answering")
+				assert_false(first, "one miss is tolerated")
+				assert_true(second, "restarted on the second")
+				assert_eq(restarts, 1, "one restart")
+				assert_false(off, "not checked while openUF does not run it")
+			end)
+		end
+	},
 }

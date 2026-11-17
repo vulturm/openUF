@@ -114,6 +114,29 @@ function M.set_enabled(enabled, cfg, roam_assist)
 	return true
 end
 
+-- usteerd can wedge after a few radio restarts: it spins at full CPU and stops
+-- answering ubus, so nothing is steered, and procd, seeing a live process,
+-- never respawns it. Restart it after this many consecutive unanswered checks.
+M.HUNG_CHECKS = 2
+M._unanswered = 0
+
+function M.watchdog()
+	if not M.filter_wanted() then
+		M._unanswered = 0
+		return false
+	end
+	if util.exec_ok(M._run_cmd("ubus -t 3 call usteer get_config >/dev/null 2>&1")) then
+		M._unanswered = 0
+		return false
+	end
+	M._unanswered = M._unanswered + 1
+	if M._unanswered < M.HUNG_CHECKS then return false end
+	io.stderr:write("openuf: usteer: not answering ubus -- restarting it\n")
+	M._run_cmd("/etc/init.d/usteer restart 2>/dev/null")
+	M._unanswered = 0
+	return true
+end
+
 -- ─── Keep usteer's AP-to-AP sync off the air ────────────────────────────────
 --
 -- usteerd tells the other APs what it sees by broadcasting its whole station
