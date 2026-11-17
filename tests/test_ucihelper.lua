@@ -5158,6 +5158,29 @@ Wiphy phy2
 		end
 	},
 	{
+		name = "ucihelper: a bridge is never pinned to a port MAC the kernel made up at boot",
+		fn = function()
+			-- announce.get_identity identifies by the bridge then; writing the
+			-- port's random MAC into UCI would move the identity and the DHCP
+			-- lease at every boot.
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "type", "bridge")
+				c:set("network", "br_lan", "name", "br-lan")
+				ucihelper._read_file = function(path)
+					if path:match("/eth1/master/uevent") then return "INTERFACE=br-lan\n" end
+					if path:match("/eth1/addr_assign_type") then return "1\n" end
+					if path:match("/eth1/address")    then return "00:00:5e:00:53:66\n" end
+					if path:match("/br%-lan/address") then return "00:00:5e:00:53:42\n" end
+				end
+				assert_false(ucihelper.ensure_bridge_identity({net = {lan_cpueth = "eth1"}}),
+					"nothing pinned")
+				assert_nil(db.network.br_lan.macaddr, "UCI untouched")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: the management bridge is pinned to the identity MAC",
 		fn = function()
 			-- openUF takes its MAC from lan_cpueth and its reported IP from the

@@ -241,9 +241,8 @@ M._last_reply = {}
 -- Returns a 6-element byte table or nil on failure.
 function M.get_mac(iface)
 	iface = iface or "eth0"
-	local f = io.open("/sys/class/net/" .. iface .. "/address", "r")
-	if not f then return nil end
-	local line = f:read("*l"); f:close()
+	local raw = M._read_file("/sys/class/net/" .. iface .. "/address")
+	local line = type(raw) == "string" and raw:match("^[^\r\n]+")
 	if not line then return nil end
 	local mac = {}
 	for byte in line:gmatch("[0-9a-fA-F]+") do
@@ -329,6 +328,70 @@ function M.get_ip(iface)
 		end
 	end
 	return nil
+end
+
+-- Whether a netdev's MAC is one the kernel made up at boot, i.e. differs on
+-- every boot. addr_assign_type: 0 permanent, 1 random, 2 stolen, 3 set (by
+-- netifd from a UCI `macaddr`). A MikroTik hAP ac (ath79, RB962UiGS) is the
+-- case that motivated it: RouterBoot keeps the MAC in hard_config, which the
+-- DTS cannot point ag71xx at, so eth0 AND eth1 get a random one every boot,
+-- and an identity read from them is a new device to the controller after
+-- every reboot. Its map names hard_config instead (identity_mac_file).
+--
+-- A bridge needs care: the kernel creates it with a random MAC (type 1), then
+-- copies its first port's address WITHOUT touching the type, so a bridge whose
+-- MAC follows a permanent port still reads 1. It is judged by the port whose
+-- MAC it carries. An unreadable type (an old kernel) is not evidence: false,
+-- the behaviour before this check existed.
+function M.mac_is_random(dev)
+	local base = "/sys/class/net/" .. dev
+	local t = tonumber((M._read_file(base .. "/addr_assign_type") or ""):match("%d+") or "")
+	if t ~= 1 then return false end
+	if not M._read_file(base .. "/bridge/bridge_id") then return true end
+	local function addr(d)
+		local raw = M._read_file("/sys/class/net/" .. d .. "/address")
+		return type(raw) == "string" and raw:match("%x%x:%x%x:%x%x:%x%x:%x%x:%x%x") or nil
+	end
+	local mine = addr(dev)
+	for name in tostring(M._read_file("/proc/net/dev") or ""):gmatch("([^%s:]+):") do
+		if master_of(name) == dev and mine and addr(name) == mine then
+			return M.mac_is_random(name)
+		end
+	end
+	return true
+end
+
+-- The MAC a board's map says is its own (dev.conf.net.identity_mac_file), as a
+-- byte table, or nil. For a board that keeps its permanent MAC where no netdev
+-- reads it: RouterBoot's hard_config on the MikroTik ath79 boards, where the
+-- kernel gives eth0 and eth1 a random one every boot. A unicast, non-zero MAC
+-- only, from an absolute path with no shell characters; anything else is nil
+-- and lan_cpueth's MAC is used as if the map said nothing.
+function M.mac_from_file(path)
+	if type(path) ~= "string" or not path:match("^/[%w%._/%-]+$") then return nil end
+	local raw = M._read_file(path)
+	local s = type(raw) == "string" and raw:match("^%s*(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s*$")
+	if not s then return nil end
+	local mac, zero = {}, true
+	for b in s:gmatch("%x%x") do
+		local v = tonumber(b, 16)
+		mac[#mac + 1] = v
+		if v ~= 0 then zero = false end
+	end
+	if zero or mac[1] % 2 == 1 then return nil end   -- all-zero, or multicast
+	return mac
+end
+
+-- The MAC this device is known by, and where it was read from: the map's
+-- identity_mac_file when it names one that reads as a MAC (board truth,
+-- whatever the netdevs hold), else lan_cpueth's own. When that one is random
+-- (mac_is_random) the caller shouts: the board needs identity_mac_file in its
+-- map, and openUF does not guess another netdev in its place.
+function M.get_identity(iface, mac_file)
+	iface = iface or "eth0"
+	local fm = M.mac_from_file(mac_file)
+	if fm then return fm, mac_file end
+	return M.get_mac(iface), iface
 end
 
 -- Injectable: command execution that captures stdout (same seam convention
@@ -565,7 +628,9 @@ if not OPENUF_TEST_MODE then
 		ufhw.uap = custom_uap or dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")
 
 		local iface = dev.conf.net.lan_cpueth or "eth1"
-		local mac   = M.get_mac(iface) or {0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad}
+		-- get_identity, as inform.lua does: both daemons must name one MAC.
+		local mac   = M.get_identity(iface, dev.conf.net.identity_mac_file)
+			or {0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad}
 		local ip    = M.get_ip(iface)  or {192, 168, 1, 1}
 		local hostname = M.get_hostname() or "openUF"
 		-- conf.lua's state_file, honoured here the same way inform.lua and
