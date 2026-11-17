@@ -3632,6 +3632,24 @@ function M.backhaul_set_uplink_enabled(enabled)
 	return changed
 end
 
+-- A radio's configured channel, as UCI holds it (a number or "auto").
+function M.radio_channel(radio)
+	if type(radio) ~= "string" then return nil end
+	return get_uci().cursor():get("wireless", radio, "channel")
+end
+
+-- Pin a radio to `chan` and `wifi reload` (netifd restarts only that radio).
+-- Returns true when UCI changed.
+function M.set_radio_channel(radio, chan)
+	if type(radio) ~= "string" or not tonumber(chan) then return false end
+	local cursor = get_uci().cursor()
+	if cursor:get("wireless", radio, "channel") == tostring(chan) then return false end
+	cursor:set("wireless", radio, "channel", tostring(chan))
+	cursor:commit("wireless")
+	M._run_cmd("wifi reload")
+	return true
+end
+
 -- The live netdev of a wifi-iface section, from `ubus call network.wireless
 -- status` (each interface entry names its `section`). nil when not up.
 function M.ifname_for_section(section)

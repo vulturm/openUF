@@ -346,6 +346,10 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		end
 	end
 
+	if new_mode == "wireless" and mode == "wireless" then
+		pcall(M.follow_parent_channel, st, ufuci, sta_if, secs[1].radio)
+	end
+
 	if M._dirty and state_mod and state_mod.save then
 		pcall(state_mod.save, st)
 		M._dirty = false
@@ -358,6 +362,69 @@ local function channel_of(freq)
 	if freq == 2484 then return 14 end
 	if freq >= 5000 then return math.floor((freq - 5000) / 5) end
 	if freq >= 2407 then return math.floor((freq - 2407) / 5) end
+	return nil
+end
+
+-- A wireless child's APs must sit on the parent's channel: the station drags
+-- the radio there anyway, and hostapd's restart onto it drops the dynamic
+-- VLAN netdevs (phy0-ap1-20) for good -- a PPSK client on that BSS then gets
+-- no DHCP, while the VLANs on the other radio survive. Pinning UCI to the
+-- parent's channel makes the radio come up there in the first place.
+--
+-- Heartbeats the parent must hold a channel before the radio follows it: a
+-- DFS move is followed once, not chased through every hop.
+M.CHANNEL_SETTLE_TICKS = 2
+M._chan_seen = nil
+M._chan_ticks = 0
+
+function M.follow_parent_channel(st, ufuci, sta_if, radio)
+	if not (st and ufuci and ufuci.radio_channel and ufuci.set_radio_channel) then return nil end
+	if not (valid_ifname(sta_if) and type(radio) == "string") then return nil end
+	local link = M._popen("iw dev " .. sta_if .. " link") or ""
+	local chan = link:match("Connected to") and channel_of(tonumber(link:match("freq:%s*(%d+)")))
+	if not chan then
+		M._chan_seen, M._chan_ticks = nil, 0
+		return nil
+	end
+	if chan == M._chan_seen then
+		M._chan_ticks = M._chan_ticks + 1
+	else
+		M._chan_seen, M._chan_ticks = chan, 1
+	end
+	if M._chan_ticks < M.CHANNEL_SETTLE_TICKS then return nil end
+	if tonumber(st.backhaul_parent_channel) ~= chan then
+		st.backhaul_parent_channel = chan
+		M._dirty = true
+	end
+	if tostring(ufuci.radio_channel(radio)) == tostring(chan) then return nil end
+	M._log(("%s is configured for channel %s but the parent is on %d -- moving it there")
+		:format(radio, tostring(ufuci.radio_channel(radio)), chan))
+	ufuci.set_radio_channel(radio, chan)
+	return chan
+end
+
+-- The radio the station rides while the uplink is wireless, else nil.
+function M.uplink_radio(st, ufuci)
+	if not (st and st.backhaul_mode == "wireless" and ufuci and ufuci.backhaul_uplink_sections) then
+		return nil
+	end
+	local secs = ufuci.backhaul_uplink_sections()
+	return secs[1] and secs[1].radio or nil
+end
+
+-- A push names the channel the controller planned; on a wireless child the
+-- uplink radio keeps the parent's instead, or every push would undo
+-- follow_parent_channel. Returns the radio pinned, or nil.
+function M.pin_parent_channel(radio_table, st, ufuci)
+	local radio = M.uplink_radio(st, ufuci)
+	local chan = st and tonumber(st.backhaul_parent_channel)
+	if not (radio and chan) then return nil end
+	for _, r in ipairs(radio_table or {}) do
+		if r.name == radio then
+			r.channel = chan
+			return radio
+		end
+	end
 	return nil
 end
 
