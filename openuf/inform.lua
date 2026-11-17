@@ -4903,6 +4903,9 @@ function M.handle_response(json_str, st, cfg)
 						M._steering_flags(vap_table, sys_raw)
 					M._usteer.set_enabled(steering_active, cfg, roam_assist_active)
 					M._usteer_filter_next = 0   -- re-check the sync filter next tick
+					if M._backhaul and M._backhaul.pin_parent_channel then
+						pcall(M._backhaul.pin_parent_channel, radio_table, st, ufuci)
+					end
 					pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
@@ -8134,18 +8137,21 @@ function M._dfs_reset_radio(radio, ifname)
 end
 
 -- Serve a pending dfs-reset request. Returns how many radios were moved.
-function M._maybe_service_dfs_reset(cfg)
+function M._maybe_service_dfs_reset(cfg, st)
 	if not M._dfs_reset_requested() then return 0 end
 	local ufuci, rrm, si = M._ucihelper, M._rrmscan, M._sysinfo
 	if not (ufuci and rrm and si and si.phy_channels) then return 0 end
 	local ok_r, radios = pcall(ufuci.get_radio_table, cfg and cfg.uap and cfg.uap.hwassign)
 	if not ok_r or type(radios) ~= "table" then return 0 end
+	-- The station's radio is on the parent's channel, not a configured one.
+	local uplink = M._backhaul and M._backhaul.uplink_radio
+		and M._backhaul.uplink_radio(st, ufuci) or nil
 	local moved = 0
 	for _, radio in ipairs(radios) do
 		-- 5 GHz only, as the firmware's own list_first_vaps_ifs 5 does: no
 		-- other band has DFS, so no other band can have been pushed off a
 		-- channel by radar.
-		if radio.radio == "na" and not radio.disabled then
+		if radio.radio == "na" and not radio.disabled and radio.name ~= uplink then
 			local ok_if, ifname = pcall(ufuci.get_ifname_for_radio, radio.name)
 			if ok_if and ifname then
 				local ok_m, what = pcall(M._dfs_reset_radio, radio, ifname)
@@ -8390,7 +8396,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	M._maybe_scan_neighbours(cfg, ctx)
 	-- The controller's nightly dfs-reset (syswrapper.sh dfs-reset), the same
 	-- request-file handshake as the 11k scan above.
-	pcall(M._maybe_service_dfs_reset, cfg)
+	pcall(M._maybe_service_dfs_reset, cfg, st)
 	-- One chunk of whatever sweep is queued (a command's, or the 11k-scan's),
 	-- before build_json so this inform carries what it found.
 	pcall(M._scan_job_tick)

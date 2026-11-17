@@ -439,4 +439,53 @@ return {
 				"the child behind the WDS netdev")
 		end
 	},
+	{
+		name = "backhaul: follow_parent_channel() pins the station's radio to the parent's channel once it holds",
+		fn = function()
+			local o_popen, o_log = backhaul._popen, backhaul._log
+			local link = "Connected to 00:00:5e:00:53:80 (on phy0-sta0)\n\tfreq: 5620.0\n"
+			backhaul._popen = function(cmd)
+				assert_eq(cmd, "iw dev phy0-sta0 link", "asks the station")
+				return link
+			end
+			backhaul._log = function() end
+			backhaul._chan_seen, backhaul._chan_ticks, backhaul._dirty = nil, 0, false
+			local uci = {radio0 = "153"}
+			local sets = {}
+			local uf = {
+				radio_channel = function(r) return uci[r] end,
+				set_radio_channel = function(r, c) sets[#sets + 1] = r .. "=" .. c; uci[r] = tostring(c); return true end,
+			}
+			local st = {backhaul_mode = "wireless"}
+			local first = backhaul.follow_parent_channel(st, uf, "phy0-sta0", "radio0")
+			local second = backhaul.follow_parent_channel(st, uf, "phy0-sta0", "radio0")
+			local third = backhaul.follow_parent_channel(st, uf, "phy0-sta0", "radio0")
+			link = "Not connected.\n"
+			local gone = backhaul.follow_parent_channel(st, uf, "phy0-sta0", "radio0")
+			backhaul._popen, backhaul._log = o_popen, o_log
+			assert_nil(first, "one sighting is not enough")
+			assert_eq(second, 124, "moved on the second")
+			assert_nil(third, "already there")
+			assert_nil(gone, "no link, no move")
+			assert_eq(#sets, 1, "one reload")
+			assert_eq(sets[1], "radio0=124", "the parent's channel")
+			assert_eq(st.backhaul_parent_channel, 124, "remembered for pushes")
+		end
+	},
+	{
+		name = "backhaul: pin_parent_channel() overrides the pushed channel on the uplink radio only while wireless",
+		fn = function()
+			local uf = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = false}}, "phy0-sta0")
+			local rt = {{name = "radio0", channel = 153}, {name = "radio1", channel = 6}}
+			assert_nil(backhaul.pin_parent_channel(rt, {backhaul_mode = "wired", backhaul_parent_channel = 124}, uf),
+				"wired: the controller's channel stands")
+			assert_eq(rt[1].channel, 153, "untouched while wired")
+			assert_eq(backhaul.pin_parent_channel(rt, {backhaul_mode = "wireless", backhaul_parent_channel = 124}, uf),
+				"radio0", "pinned")
+			assert_eq(rt[1].channel, 124, "the parent's channel")
+			assert_eq(rt[2].channel, 6, "the other radio keeps its own")
+			assert_nil(backhaul.pin_parent_channel(rt, {backhaul_mode = "wireless"}, uf),
+				"no parent channel learnt yet")
+		end
+	},
 }
