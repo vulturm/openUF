@@ -5705,6 +5705,57 @@ return {
 		end
 	},
 	{
+		name = "inform: _populate_net_info warns loudly when lan_cpueth's MAC is random and the map names no file",
+		fn = function()
+			local prev = inform._announce
+			local random = true
+			inform._announce = {
+				get_identity  = function(iface) return {0, 0, 0x5e, 0, 0x53, 0x66}, iface end,
+				get_mac       = function() return {0, 0, 0x5e, 0, 0x53, 0x66} end,
+				get_ip        = function() return nil end,
+				mac_is_random = function() return random end,
+			}
+			local st = {}
+			local out = with_stderr(function()
+				inform._populate_net_info(st, {net = {lan_cpueth = "eth0"}})
+			end)
+			assert_eq(st.mac, "00:00:5e:00:53:66", "lan_cpueth's MAC, not a guessed netdev's")
+			assert_contains(out, "IDENTITY WILL CHANGE AT THE NEXT BOOT", "random: loud")
+			assert_contains(out, "identity_mac_file", "and names the cure")
+			random = false
+			out = with_stderr(function()
+				inform._populate_net_info(st, {net = {lan_cpueth = "eth0"}})
+			end)
+			inform._announce = prev
+			assert_true(not out:find("IDENTITY WILL CHANGE", 1, true), "a stable MAC: silent")
+		end
+	},
+	{
+		name = "inform: _populate_net_info hands the map's identity_mac_file to get_identity and reports that MAC",
+		fn = function()
+			local o_ann, o_load = inform._announce, inform._load_announce
+			local seen
+			local stub = {
+				get_identity = function(iface, file)
+					seen = {iface, file}
+					return {0x00, 0x00, 0x5e, 0x00, 0x53, 0x42}, file
+				end,
+				get_mac = function() return nil end,
+				get_ip = function() return nil end,
+				get_hostname = function() return "ap" end,
+				mac_is_random = function() return true end,
+			}
+			inform._load_announce = function() return stub end
+			local st = {}
+			local file = "/sys/firmware/mikrotik/hard_config/mac_base"
+			inform._populate_net_info(st, {net = {lan_cpueth = "eth0", identity_mac_file = file}})
+			inform._announce, inform._load_announce = o_ann, o_load
+			assert_eq(seen[1], "eth0", "lan_cpueth")
+			assert_eq(seen[2], file, "and the map's file")
+			assert_eq(st.mac, "00:00:5e:00:53:42", "the file's MAC is the identity")
+		end
+	},
+	{
 		name = "inform packet: handle_response refuses an IP Settings push with a malformed address",
 		fn = function()
 			-- These values are spliced into `ip addr`/`ip route` command lines

@@ -1441,6 +1441,12 @@ function M.ensure_bridge_identity(cfg)
 	local br = master_of(cpueth)
 	-- No bridge means the port holds the address itself: nothing diverges.
 	if not br then return false end
+	-- A port whose MAC the kernel made up at boot (addr_assign_type 1) is no
+	-- identity (inform says so loudly; the map should name identity_mac_file).
+	-- Pinning the bridge to it would write a MAC that is gone at the next boot
+	-- into UCI, and move the DHCP lease each time.
+	local t = M._read_file("/sys/class/net/" .. cpueth .. "/addr_assign_type")
+	if tonumber(type(t) == "string" and t:match("%d+") or "") == 1 then return false end
 	local have = mac_of(br)
 	if not have or have == want then return false end
 

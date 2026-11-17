@@ -449,6 +449,84 @@ return {
 		end
 	},
 	{
+		name = "announce: get_identity keeps lan_cpueth's MAC whenever the kernel did not make it up",
+		fn = function()
+			local orig_read, orig_popen = announce._read_file, announce._popen
+			local asked = 0
+			announce._popen = function() asked = asked + 1; return "" end
+			for _, t in ipairs({"0\n", "2\n", "3\n", false}) do
+				announce._read_file = function(path)
+					if path == "/sys/class/net/eth1/address" then return "00:00:5e:00:53:01\n" end
+					if path == "/sys/class/net/eth1/addr_assign_type" then return t or nil end
+					return nil
+				end
+				local mac, src = announce.get_identity("eth1")
+				assert_eq(table.concat(mac, ","), "0,0,94,0,83,1", "lan_cpueth's MAC, type " .. tostring(t))
+				assert_eq(src, "eth1", "read from lan_cpueth")
+			end
+			announce._read_file, announce._popen = orig_read, orig_popen
+			assert_eq(asked, 0, "no command run on a board without the problem")
+		end
+	},
+	{
+		name = "announce: mac_from_file accepts a unicast MAC from an absolute path, nothing else",
+		fn = function()
+			local orig = announce._read_file
+			local files = {
+				["/sys/firmware/mikrotik/hard_config/mac_base"] = "00:00:5e:00:53:42\n",
+				["/x/zero"]  = "00:00:00:00:00:00\n",
+				["/x/mcast"] = "01:00:5e:00:53:42\n",
+				["/x/junk"]  = "not a mac\n",
+				["/x/two"]   = "00:00:5e:00:53:42 00:00:5e:00:53:43\n",
+			}
+			local asked = {}
+			announce._read_file = function(p) asked[#asked + 1] = p; return files[p] end
+			local m = announce.mac_from_file("/sys/firmware/mikrotik/hard_config/mac_base")
+			assert_eq(table.concat(m, ","), "0,0,94,0,83,66", "the label MAC, as bytes")
+			assert_nil(announce.mac_from_file("/x/zero"), "all-zero is no identity")
+			assert_nil(announce.mac_from_file("/x/mcast"), "a multicast MAC is no identity")
+			assert_nil(announce.mac_from_file("/x/junk"), "junk")
+			assert_nil(announce.mac_from_file("/x/two"), "one MAC, not a list")
+			assert_nil(announce.mac_from_file("/x/missing"), "a missing file")
+			local n = #asked
+			assert_nil(announce.mac_from_file("relative/path"), "a relative path")
+			assert_nil(announce.mac_from_file("/x/a b"), "a path with a space")
+			assert_nil(announce.mac_from_file("/x/$(reboot)"), "a path with shell characters")
+			assert_nil(announce.mac_from_file(nil), "no path")
+			assert_eq(#asked, n, "a refused path is never even read")
+			announce._read_file = orig
+		end
+	},
+	{
+		name = "announce: get_identity takes the map's identity_mac_file first, and lan_cpueth's MAC when it is unusable",
+		fn = function()
+			local orig_read, orig_popen = announce._read_file, announce._popen
+			local base = "00:00:5e:00:53:42\n"
+			announce._read_file = function(path)
+				local f = {
+					["/sys/firmware/mikrotik/hard_config/mac_base"] = base,
+					["/sys/class/net/eth0/address"]          = "00:00:5e:00:53:66\n",
+					["/sys/class/net/eth0/addr_assign_type"] = "1\n",
+				}
+				return f[path]
+			end
+			announce._popen = function() return "" end
+			announce._holder = nil
+			local file = "/sys/firmware/mikrotik/hard_config/mac_base"
+			local mac, src = announce.get_identity("eth0", file)
+			assert_eq(src, file, "the board's own MAC, not a netdev")
+			assert_eq(table.concat(mac, ","), "0,0,94,0,83,66", "the label MAC, not eth0's random one")
+			base = "garbage\n"
+			mac, src = announce.get_identity("eth0", file)
+			assert_eq(src, "eth0", "an unusable file: lan_cpueth, as with no file")
+			assert_eq(table.concat(mac, ","), "0,0,94,0,83,102", "eth0's")
+			mac, src = announce.get_identity("eth0")
+			assert_eq(src, "eth0", "no file named: unchanged")
+			announce._read_file, announce._popen = orig_read, orig_popen
+			announce._holder = nil
+		end
+	},
+	{
 		name = "announce: get_ip returns nil when neither port nor bridge has an address",
 		fn = function()
 			announce._holder = nil

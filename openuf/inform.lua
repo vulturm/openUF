@@ -6110,7 +6110,33 @@ function M._populate_net_info(st, cfg)
 	if not announce then return end
 
 	local iface = cfg and cfg.net and cfg.net.lan_cpueth or "eth1"
-	local mac_tbl = announce.get_mac(iface)
+	-- get_identity: the map's identity_mac_file (board truth) when it reads as
+	-- a MAC, else lan_cpueth's. Feature-detected for a test's stand-in announce.
+	local mac_tbl, mac_src
+	local mac_file = cfg and cfg.net and cfg.net.identity_mac_file
+	if announce.get_identity then
+		mac_tbl, mac_src = announce.get_identity(iface, mac_file)
+	else
+		mac_tbl, mac_src = announce.get_mac(iface), iface
+	end
+	if mac_tbl and mac_file and mac_src == mac_file then
+		io.stderr:write(string.format(
+			"openuf: identity from %s, the board's own MAC (the modelmap's identity_mac_file)\n",
+			tostring(mac_file)))
+	elseif mac_file then
+		io.stderr:write(string.format(
+			"openuf: the modelmap names %s for the identity but it holds no usable MAC --\n" ..
+			"openuf: using %s's\n", tostring(mac_file), tostring(iface)))
+	end
+	if mac_tbl and mac_src == iface and announce.mac_is_random and announce.mac_is_random(iface) then
+		io.stderr:write(string.format(
+			"openuf: IDENTITY WILL CHANGE AT THE NEXT BOOT: %s has a random MAC (a new one\n" ..
+			"openuf: every boot). Name the board's permanent MAC in its modelmap\n" ..
+			"openuf: (dev.conf.net.identity_mac_file), or pin it in UCI before adopting:\n" ..
+			"openuf:   uci add network device; uci set network.@device[-1].name='%s'\n" ..
+			"openuf:   uci set network.@device[-1].macaddr='<the board label MAC>'; uci commit network\n",
+			tostring(iface), tostring(iface)))
+	end
 	if mac_tbl then
 		-- Format as "xx:xx:xx:xx:xx:xx"
 		st.mac = string.format("%02x:%02x:%02x:%02x:%02x:%02x",
