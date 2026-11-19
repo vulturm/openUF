@@ -2553,6 +2553,20 @@ local _IEEE_MODE_PHY = {
 local _IEEE_MODE_WIDTHS = { ["20"] = true, ["40"] = true, ["80"] = true,
 	["160"] = true, ["320"] = true }
 
+-- A radio's transmit power from the push. `radio.<n>.txpower_mode` is the
+-- control (auto/custom/disabled on the wire so far) and `radio.<n>.txpower`
+-- only the Custom value -- which the controller keeps sending after the
+-- switch goes back to Auto, so reading `txpower` alone kept a radio at its
+-- last Custom dBm (1 dBm, on a board whose power had been lowered once to
+-- force a push). Auto wins over any number; Custom takes the number; a mode
+-- not seen on the wire yet keeps the reading this had before modes were
+-- read, rather than a guessed meaning.
+local function _tx_power_from_wire(mode, txpower)
+	if mode == "auto" then return "auto" end
+	return tonumber(txpower) or (txpower == "auto" and "auto" or nil)
+end
+M._tx_power_from_wire = _tx_power_from_wire
+
 local function _htmode_from_ieee_mode(ieee_mode)
 	if type(ieee_mode) ~= "string" then return nil end
 	-- The band ("ng"/"na"/...) between the "11" and the PHY is deliberately
@@ -3203,7 +3217,9 @@ function M._parse_wifi_system_cfg(sys_raw)
 				-- option for it. Dropping it to nil instead stranded the last
 				-- fixed dBm in UCI, silently overriding the user's switch
 				-- back to Auto. Absent/garbage still -> nil, leaving UCI alone.
-				tx_power = tonumber(r.txpower) or (r.txpower == "auto" and "auto" or nil),
+				-- txpower_mode decides (_tx_power_from_wire): `txpower` is
+				-- only the Custom value, and it outlives the switch to Auto.
+				tx_power = _tx_power_from_wire(r.txpower_mode, r.txpower),
 				-- nil for an absent/unrecognized token, leaving htmode alone.
 				htmode   = _htmode_from_ieee_mode(r.ieee_mode),
 				-- Per-radio disable (Devices -> [AP] -> Radios -> Transmit

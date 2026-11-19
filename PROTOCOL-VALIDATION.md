@@ -736,7 +736,10 @@ feature 27 in the matrix.
 ### `radio.<n>.*` — per-radio config
 
 `phyname` (`radio0`), `channel` (integer or the literal `auto`), `txpower` (integer or `auto`),
-`txpower_mode` (`auto`/`custom`/`disabled`), `status`, `ieee_mode`. When no radio is
+`txpower_mode` (`auto`/`custom`/`disabled`), `status`, `ieee_mode`. **`txpower_mode` is the
+control and `txpower` only the Custom value**: under `auto` openUF ignores whatever number
+`txpower` still carries (it used to apply it, so a radio set to Custom once stayed at that dBm
+after the switch went back to Auto). When no radio is
 provisionable the blob contains the literal comment `# no wlan provisioned as no radio found`
 and the **unindexed** `radio.status=disabled` — see
 [`radio_table` must not be empty](#radio_table-entry).

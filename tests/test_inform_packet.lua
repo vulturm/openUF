@@ -9993,4 +9993,21 @@ return {
 			inform._backhaul, inform._state = o_bh, o_state
 		end
 	},
+	{
+		name = "inform: txpower_mode=auto wins over the Custom dBm the controller keeps sending",
+		fn = function()
+			local sys_cfg = "radio.1.phyname=radio0\nradio.1.txpower_mode=auto\nradio.1.txpower=1\n"
+				.. "radio.2.phyname=radio1\nradio.2.txpower_mode=custom\nradio.2.txpower=17\n"
+				.. "radio.3.phyname=radio2\nradio.3.txpower=12\n"
+			local radio_table = inform._parse_wifi_system_cfg(sys_cfg)
+			local by = {}
+			for _, r in ipairs(radio_table) do by[r.name] = r end
+			assert_eq(by.radio0.tx_power, "auto", "Auto: the stale Custom 1 dBm is ignored")
+			assert_eq(by.radio1.tx_power, 17, "Custom: the number")
+			assert_eq(by.radio2.tx_power, 12, "no mode on the wire: the number, as before")
+			assert_eq(inform._tx_power_from_wire("high", "14"), 14, "an unseen mode: no guessed meaning")
+			assert_nil(inform._tx_power_from_wire(nil, nil), "nothing: leave UCI alone")
+			assert_eq(inform._tx_power_from_wire(nil, "auto"), "auto", "txpower=auto alone: auto")
+		end
+	},
 }
