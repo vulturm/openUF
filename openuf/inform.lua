@@ -4909,6 +4909,7 @@ function M.handle_response(json_str, st, cfg)
 							ap_off_radios = M._ap_off_radios(st, cfg),
 							backhaul = backhaul_plan})
 					M._deny_reloaded()   -- apply_config ran `wifi reload`
+					M._regd_pending = true   -- the push may have changed the country
 				end
 			end
 
@@ -6873,6 +6874,61 @@ function M._remotelog_resync(st, cfg)
 	if st.hash_id ~= had then M._state.save(st) end
 	return true
 end
+-- ─── The regulatory domain a radio really runs under ────────────────────────
+
+-- openUF programs the controller's site country into each radio's UCI
+-- `country`, and hostapd beacons it -- but a driver that keeps a regdomain of
+-- its own (an EEPROM-locked ath9k/ath10k built without OpenWrt's
+-- ATH_USER_REGD, as on a MikroTik hAP ac: global HK, phy0 and phy1 US) applies
+-- ITS channel and power limits, silently: 29 dBm on 2.4 GHz and a 60 s CAC on
+-- ETSI's 10-minute weather channels, under a site set to an ETSI country.
+-- Said once per radio and pair, and kept in /tmp/openuf-status while it holds;
+-- checked until every reported radio could be judged, and again after a push
+-- (which may change the country). Nothing is changed: no userspace setting can
+-- lift a driver's own regdomain.
+M._regd_pending = true
+M._regd_warned = {}
+M._regd_mismatch = nil   -- "radio0:US!=HK,radio1:US!=HK" while one holds
+
+function M._regd_tick(cfg)
+	if not M._regd_pending then return end
+	local ufuci, si = M._ucihelper, M._sysinfo
+	if not (ufuci and ufuci.get_radio_table and ufuci.radio_country and si and si.regdomains) then return end
+	local rd = si.regdomains(si._run_cmd and si._run_cmd("iw reg get") or nil)
+	if not rd then return end
+	local ok, radios = pcall(ufuci.get_radio_table, cfg and cfg.uap and cfg.uap.hwassign)
+	if not ok or type(radios) ~= "table" then return end
+	local judged, bad = true, {}
+	for _, r in ipairs(radios) do
+		local want = r.name and ufuci.radio_country(r.name)
+		if want then
+			local ifname = ufuci.get_ifname_for_radio and ufuci.get_ifname_for_radio(r.name)
+			local phy = type(ifname) == "string" and ifname:match("^[%w%._-]+$")
+				and (M._read_file("/sys/class/net/" .. ifname .. "/phy80211/name") or ""):match("^(phy%d+)")
+			if not phy then
+				judged = false          -- radio not up yet: ask again next heartbeat
+			else
+				local have = rd.phys[phy] or rd.global
+				if have and have ~= want then
+					bad[#bad + 1] = r.name .. ":" .. have .. "!=" .. want
+					local key = r.name .. ":" .. have .. ":" .. want
+					if not M._regd_warned[key] then
+						M._regd_warned[key] = true
+						io.stderr:write(string.format(
+							"openuf: %s runs under regulatory domain %s, not %s (the controller's site\n" ..
+							"openuf: country, in UCI and in the beacons): the %s driver keeps a domain of its\n" ..
+							"openuf: own, so channels and power limits are %s's. On ath9k/ath10k that is an\n" ..
+							"openuf: EEPROM-locked radio in a build without ATH_USER_REGD.\n",
+							r.name, have, want, phy, have))
+					end
+				end
+			end
+		end
+	end
+	M._regd_mismatch = (#bad > 0) and table.concat(bad, ",") or nil
+	if judged then M._regd_pending = false end
+end
+
 -- One heartbeat of the wireless-uplink policy (backhaul.lua): wired first,
 -- the WDS station only while the wired uplink socket has no carrier. A no-op
 -- on a device whose push carried no uplink station.
@@ -7982,6 +8038,9 @@ function M._write_status(st, fields)
 	-- A wireless child whose APs cannot start on the parent's channel
 	-- (backhaul.check_ap_stall): healthy informs, nothing on the air. Only while
 	-- it lasts, as <radio>:<channel>:<dfs|unknown>.
+	-- A radio whose driver applies another regulatory domain than UCI's
+	-- (_regd_tick), as radio:have!=want pairs.
+	if M._regd_mismatch then lines[#lines + 1] = "regd_mismatch=" .. M._regd_mismatch end
 	local stall = M._backhaul and M._backhaul.ap_stall
 	if type(stall) == "table" then
 		lines[#lines + 1] = ("ap_stall=%s:%s:%s"):format(tostring(stall.radio),
@@ -8360,6 +8419,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	local ok_ag, err_ag = pcall(M._applyguard_tick, st, cfg)
 	if not ok_ag then io.stderr:write("inform: applyguard: " .. tostring(err_ag) .. "\n") end
 	pcall(M._backhaul_tick, st, cfg)
+	pcall(M._regd_tick, cfg)
 	pcall(M._meshvlan_resync, st, cfg)
 	pcall(M._hairpin_resync)
 	pcall(M._usteer_filter_resync)

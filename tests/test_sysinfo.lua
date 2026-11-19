@@ -1064,6 +1064,25 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: regdomains() reads the global domain and each phy's own from iw reg get",
+		fn = function()
+			-- A hAP ac: global HK, both ath radios EEPROM-locked to US.
+			local text = table.concat({
+				"global", "country HK: DFS-ETSI", "\t(2402 - 2482 @ 40), (N/A, 20), (N/A)", "",
+				"phy#1", "country US: DFS-FCC", "\t(2400 - 2472 @ 40), (N/A, 30), (N/A)", "",
+				"phy#0", "country US: DFS-FCC", "\t(5150 - 5250 @ 80), (N/A, 23), (N/A), AUTO-BW", "",
+			}, "\n")
+			local rd = sysinfo.regdomains(text)
+			assert_eq(rd.global, "HK", "the global domain")
+			assert_eq(rd.phys.phy0, "US", "phy0's own")
+			assert_eq(rd.phys.phy1, "US", "phy1's own")
+			local plain = sysinfo.regdomains("global\ncountry DE: DFS-ETSI\n\t(2402 - 2482 @ 40)\n")
+			assert_eq(plain.global, "DE", "a board whose radios follow the global domain")
+			assert_nil(next(plain.phys), "lists no phy of its own")
+			assert_nil(sysinfo.regdomains(""), "no output")
+		end
+	},
+	{
 		name = "sysinfo: ubnt_name_ie_hex() builds UniFi's device-name element, clean and bounded",
 		fn = function()
 			-- The layout a current-firmware AP beacons: 00156d 01 <name>.
