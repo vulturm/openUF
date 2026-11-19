@@ -22,7 +22,7 @@ DOCKERFILE := tools/testenv/Dockerfile
 IMAGE := openuf-testenv:$(shell sha256sum $(DOCKERFILE) | cut -c1-12)
 
 # podman (rootless) maps the caller to the container's root and back with keep-id;
-# docker needs --user, or build/ and openuf.tar.gz come out owned by root. :Z relabels
+# docker needs --user, or build/ and openuf.tar.gz come out owned by root. :z relabels
 # the mount for SELinux (Fedora), and is ignored where SELinux is off.
 ifneq ($(findstring podman,$(ENGINE)),)
 USERFLAGS := --userns=keep-id
@@ -30,12 +30,19 @@ else
 USERFLAGS := --user $(shell id -u):$(shell id -g)
 endif
 
+# In a git worktree .git is a file naming a directory under the main checkout, outside
+# the mount, and dist.sh's `git describe` stamped BUILD "unknown" (the first deploy from
+# a worktree). Mount that directory too, at its own path, when it is not under the tree.
+# :z (shared), not :Z, because two trees' containers may label the same .git.
+GIT_COMMON := $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+GITMOUNT := $(if $(GIT_COMMON),$(if $(filter $(CURDIR)/%,$(GIT_COMMON)),,-v $(GIT_COMMON):$(GIT_COMMON):z))
+
 ifeq ($(LOCAL),1)
 RUN := sh -c
 ENSURE :=
 else
 RUN := $(ENGINE) run --rm $(if $(filter shell,$(MAKECMDGOALS)),-it) $(USERFLAGS) \
-	-v $(CURDIR):/src:Z -w /src -e OPENUF_REQUIRE_GCM=1 $(IMAGE) sh -c
+	-v $(CURDIR):/src:z $(GITMOUNT) -w /src -e OPENUF_REQUIRE_GCM=1 $(IMAGE) sh -c
 ENSURE := ensure-image
 endif
 
