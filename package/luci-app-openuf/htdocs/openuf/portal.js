@@ -437,27 +437,56 @@
 
 	const BAND = f => !f ? '' : f < 3000 ? '2.4 GHz' : f < 5950 ? '5 GHz' : '6 GHz';
 
-	// 802.11k/v/r in one place, and whose neighbour list clients actually
-	// get. Band Steering and Roaming Assistant are the controller's switches,
-	// so the page explains the trade instead of offering a toggle the next
-	// config push would undo: with either on, usteer runs and rewrites every
-	// list each second with the APs that run usteer, so genuine UniFi APs
-	// are never named (nrlist.lua's header).
+	// 802.11k/v/r in one place, top-down: who keeps the neighbour lists and
+	// why, what to change in the controller to switch it, the switch for
+	// openUF's own list, then what each network actually tells a client.
+	// Band Steering and Roaming Assistant are the controller's settings, so
+	// the page names them instead of offering a toggle the next push would
+	// undo. With either on usteer runs and rewrites every list each second
+	// with the APs that run usteer, so genuine UniFi APs are never named
+	// (nrlist.lua's header).
 	function roamingGroup(ro) {
 		const r = settings.roaming;
 		const listOn = value('neighbour_list', '1') === '1';
-		let note = null;
-		if (r && r.usteer)
-			note = h('div', { class: 'notice warn' }, h('span', { html: ICON.info }), h('span', {},
-				h('strong', {}, 'Band Steering or Roaming Assistant is on in the controller. '),
-				'usteer then keeps the neighbour lists and names only access points that run usteer: genuine UniFi access points are left out, and openUF\'s list is not used. ',
-				'To give clients the whole site, turn both off on this site\'s networks in the controller. Clients then roam by themselves with 802.11k and fast roaming, but are no longer moved to 5 GHz or away from a weak access point.'));
-		else if (r && listOn)
-			note = h('div', { class: 'notice' }, h('span', { html: ICON.info }), h('span', {},
-				'openUF keeps the neighbour lists: the site\'s other access points on the same network, openUF and UniFi alike, and this one\'s other band. Band Steering and Roaming Assistant are off.'));
-		const rows = [
-			row('Tell clients about nearby access points', 'Answer 802.11k neighbour requests with the site\'s other access points, so clients roam to the right one.', toggle('neighbour_list', '1', ro), { inline: true })
-		];
+		const rows = [];
+		if (r) {
+			const keeper = r.usteer ? 'usteer' : listOn ? 'openUF' : 'Nobody';
+			const what = r.usteer
+				? 'Names only access points that run usteer. Genuine UniFi access points are left out.'
+				: listOn ? 'Names the site\'s other access points on the same network, openUF and UniFi alike, and this one\'s other band.'
+					: 'Each network names only this access point\'s own other band, if anything.';
+			rows.push(row('Neighbour lists kept by', what, h('span', { class: 'value' }, keeper), { inline: true }));
+			const w = r.steering || {};
+			// A function: a DOM node can sit in one notice only.
+			const items = () => {
+				const out = [];
+				for (const n of w.band_wlans || []) out.push(h('li', {}, 'Band Steering on the network ', h('strong', {}, n)));
+				if (w.band_device) out.push(h('li', {}, 'Band Steering in this access point\'s own device settings (Prefer 5 GHz)'));
+				for (const n of w.roam_wlans || []) out.push(h('li', {}, 'Roaming Assistant on the network ', h('strong', {}, n)));
+				return out;
+			};
+			const asked = items().length > 0;
+			if (r.usteer)
+				rows.push(h('div', { class: 'notice warn' }, h('span', { html: ICON.info }), h('div', {},
+					h('strong', {}, 'usteer runs because the controller asks for:'),
+					asked ? h('ul', { class: 'todo' }, items())
+						: h('p', { class: 'todo' }, 'Band Steering or Roaming Assistant.'),
+					h('p', { class: 'todo' }, 'Turn off the switch below to stop usteer on this access point only, or turn these off in the controller for the whole site.'))));
+			// This AP alone; the controller keeps both on for the others
+			// (inform._local_steering_gate). A push applies it: the daemon asks
+			// for one when the option changes.
+			rows.push(row('Follow the controller\'s steering',
+				'Run usteer for Band Steering and Roaming Assistant when the controller turns them on. Off, this access point ignores both and openUF keeps the neighbour lists; other access points go on steering, and the controller still shows both as on here. 802.11k, 802.11v and fast roaming stay on. Takes effect within a minute.',
+				toggle('controller_steering', '1', ro), { inline: true }));
+			if (value('controller_steering', '1') === '0' && asked)
+				rows.push(h('div', { class: 'notice' }, h('span', { html: ICON.info }), h('div', {},
+					h('strong', {}, 'Ignored on this access point:'), h('ul', { class: 'todo' }, items()),
+					h('p', { class: 'todo' }, 'Clients are not moved to 5 GHz or away from a weak access point here; they roam by themselves.'))));
+		}
+		rows.push(row('openUF\'s neighbour list', r && r.usteer
+			? 'Used once usteer stops. Answers 802.11k requests with the site\'s other access points.'
+			: 'Answer 802.11k requests with the site\'s other access points, so clients roam to the right one.',
+			toggle('neighbour_list', '1', ro), { inline: true }));
 		for (const b of (r && r.bss) || []) {
 			const parts = [];
 			if (!b.rrm) parts.push('802.11k off');
@@ -479,8 +508,7 @@
 		if (r)
 			rows.push(row('Fast roaming with UniFi access points', 'The 802.11r translator (rrb-unifi) that lets clients hand over between this access point and genuine UniFi ones without a full reconnect.',
 				h('span', { class: 'value' }, r.rrb_unifi ? 'Installed' : 'Not installed'), { inline: true }));
-		return h('div', { class: 'group card' },
-			h('div', { class: 'group-title' }, 'Roaming'), note, ...rows);
+		return h('div', { class: 'group card' }, h('div', { class: 'group-title' }, 'Roaming'), ...rows);
 	}
 
 	function renderForm(root) {
