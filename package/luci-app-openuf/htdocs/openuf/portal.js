@@ -460,7 +460,9 @@
 						body: ['This access point will drop its adoption and the configuration the controller pushed, and wait to be adopted again.', 'The controller will show it as offline until you forget it there too.'],
 						actions: [{ label: 'Cancel' }, { label: 'Forget controller', class: 'danger solid', run: () => exec('/usr/bin/openuf', ['reset-inform'], 'Adoption reset.') }]
 					})
-				}, 'Forget controller'))
+				}, 'Forget controller')),
+			row('Undo a push that takes the access point offline', 'If, four minutes after the controller changes the configuration, a radio has not come back or the controller cannot be reached, the previous configuration is restored. It also undoes a change meant to move the device where the controller cannot follow at once, such as a new management VLAN.', toggle('apply_rollback', '0', ro), { inline: true }),
+			row('Create the controller\'s device login', 'Add the SSH account set under Device Authentication in the controller, with the password it sends. The account has full root rights.', toggle('device_login', '0', ro), { inline: true })
 		));
 
 		const idLocked = adopted;
@@ -476,7 +478,31 @@
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Wireless'),
 			row('Only broadcast UniFi networks', 'Turn off wireless networks set up on this device by hand, so only the controller\'s networks are on the air.', toggle('use_only_unifi_wlan', '1', ro), { inline: true }),
-			row('Announce on the local network', 'Let UniFi Network discover this access point without typing its address.', toggle('l2_announce', '1', ro), { inline: true })
+			row('Announce on the local network', 'Let UniFi Network discover this access point without typing its address.', toggle('l2_announce', '1', ro), { inline: true }),
+			// Defaults are uciconf.lua's (and conf.lua's): an option the
+			// section does not hold must show what the daemon actually does.
+			row('Recognised by UniFi access points', 'Beacon the element genuine UniFi access points look for, so they do not report this one\'s networks as a rogue impersonating the site.', toggle('unifi_sibling_ie', '1', ro), { inline: true }),
+			row('Tell clients about nearby access points', 'Answer 802.11k neighbour requests with the site\'s other access points, so clients roam to the right one. Where Band Steering or Roaming Assistant is on, usteer keeps this list instead, and it names only access points that run usteer: genuine UniFi ones are left out.', toggle('neighbour_list', '1', ro), { inline: true })
+		));
+
+		// The controller's Environment view. A value set by hand that is not
+		// one of the steps stays selectable, or opening the page would offer
+		// to rewrite it.
+		const scanSteps = [{ value: '0', label: 'Never' }, { value: '300', label: 'Every 5 minutes' },
+			{ value: '900', label: 'Every 15 minutes' }, { value: '3600', label: 'Every hour' }];
+		const scanNow = String(value('neighbour_scan_interval', '0'));
+		if (!scanSteps.some(c => c.value === scanNow)) scanSteps.push({ value: scanNow, label: 'Every ' + scanNow + ' s' });
+		groups.push(h('div', { class: 'group card' },
+			h('div', { class: 'group-title' }, 'Radio environment'),
+			row('Ask clients to scan', 'Have one capable client at a time report the networks it hears. The access point never leaves its channel; the client does, for about a second.', toggle('rrm_enrichment', '1', ro), { inline: true }),
+			row('Scan for neighbouring networks', 'The access point scans a few channels at a time, under half a second off the air each, so the controller\'s Environment view stays filled.',
+				select('neighbour_scan_interval', '0', scanSteps, ro))
+		));
+
+		groups.push(h('div', { class: 'group card' },
+			h('div', { class: 'group-title' }, 'Wireless uplink (mesh)'),
+			row('Serve clients on the uplink radio', 'When off, a wirelessly meshed access point keeps its uplink radio for the uplink alone; its networks stay on the other radios and come back when a cable takes over. The controller cannot set this.', toggle('uplink_radio_aps', '1', ro), { inline: true }),
+			row('Recover networks after a DFS move', 'When the parent moves to a radar (DFS) channel this radio has not checked, its networks stay off the air. On, the access points are restarted to run the radar check, with the uplink kept up; they return a minute later (ten on channels 120–128). Experimental.', toggle('dfs_cac_recover', '0', ro), { inline: true })
 		));
 
 		groups.push(h('div', { class: 'group card' },
