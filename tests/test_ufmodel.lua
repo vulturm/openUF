@@ -65,6 +65,25 @@ return {
 		end
 	},
 	{
+		name = "ufmodel: every identity carries its sysid from Ubiquiti's device database",
+		fn = function()
+			-- static.ui.com/fingerprint/ui/public.json. Beaconed in
+			-- UniFi's sibling element (sysinfo.ubnt_ie_hex): a wrong one names
+			-- another model to every genuine UniFi AP on the site.
+			local want = {u6iw = "a652", uhdiw = "ec22", u7hd = "e530", u6mp = "a6a1",
+				uapg1 = "e542", ["uapg1-lr"] = "e552", ["uapg2-ac-lr"] = "e527"}
+			local seen = 0
+			each_ufmodel(function(name, uap)
+				assert_true(type(uap.sysid) == "string" and uap.sysid:match("^%x%x%x%x$") ~= nil,
+					name .. ": sysid is four hex digits, got " .. tostring(uap.sysid))
+				local key = name:gsub("%.lua$", "")
+				assert_eq(uap.sysid, want[key], name .. ": the database's sysid")
+				seen = seen + 1
+			end)
+			assert_true(seen >= 7, "every identity was checked")
+		end
+	},
+	{
 		name = "ufmodel: uhdiw is the UAP-IW-HD with the catalog's bare firmware version",
 		fn = function()
 			-- The WiFi 5 in-wall identity. Its model code and firmware version
