@@ -3457,6 +3457,17 @@ end
 -- hosts a single SSID -- not good enough for per-WLAN features like the
 -- Multicast and Broadcast Blocker, where picking the wrong VAP's netdev would
 -- silently apply one SSID's filter to another. Returns nil if unresolvable.
+-- An interface that can be an AP's BSS: netifd's config says `ap`, or says
+-- nothing (a build that does not report it). A wireless uplink's station is
+-- NOT one: on a radio whose SSIDs are off (uplink_radio_aps = false) it was
+-- the radio's only interface, the single-interface fallback below handed it
+-- to every off SSID, and the parent's downlink BSS went out as a CLIENT of
+-- each -- the controller listed it among the clients.
+local function is_ap_iface(iface)
+	local mode = type(iface.config) == "table" and iface.config.mode or nil
+	return mode == nil or mode == "ap"
+end
+
 local function find_vap_iface(radio, ssid)
 	if not radio or not ssid then return nil end
 	local status = wireless_status()
@@ -3464,7 +3475,7 @@ local function find_vap_iface(radio, ssid)
 	local dev = status[radio]
 	if type(dev) ~= "table" or type(dev.interfaces) ~= "table" then return nil end
 	for _, iface in ipairs(dev.interfaces) do
-		if type(iface) == "table" and iface.ifname
+		if type(iface) == "table" and iface.ifname and is_ap_iface(iface)
 			and type(iface.config) == "table" and iface.config.ssid == ssid then
 			return iface
 		end
@@ -3476,7 +3487,7 @@ local function find_vap_iface(radio, ssid)
 	-- could be. Deliberately not extended to the multi-interface case -- there
 	-- a wrong guess would apply one SSID's filter to another, which is worse
 	-- than not applying it at all.
-	if #dev.interfaces == 1 and type(dev.interfaces[1]) == "table" then
+	if #dev.interfaces == 1 and type(dev.interfaces[1]) == "table" and is_ap_iface(dev.interfaces[1]) then
 		return dev.interfaces[1]
 	end
 	return nil
