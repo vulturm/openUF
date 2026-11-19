@@ -16,6 +16,10 @@ local uap = {}
 
 uap = {
 	platform		= "U6IW",
+	-- System id: Ubiquiti's public device database (static.ui.com/fingerprint/
+	-- ui/public.json). Beaconed in UniFi's sibling element
+	-- (sysinfo.ubnt_ie_hex) so genuine UniFi APs do not list this AP as a rogue.
+	sysid			= "a652",
 	model			= "U6IW",
 	fw				= {
 		pre			= "U6IW.",
