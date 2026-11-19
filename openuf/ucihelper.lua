@@ -1037,6 +1037,75 @@ local OFDM_RATES = {6000, 9000, 12000, 18000, 24000, 36000, 48000, 54000}
 --
 -- Returns nil when the floor excludes every rate in the band, rather than
 -- emitting an empty list that would leave hostapd unable to bring the BSS up.
+-- The radio's basic (mandatory) rates for the STRICTEST floor among its
+-- WLANs. hostapd's basic rates are the radio's, while the controller sets a
+-- floor per WLAN; each WLAN's own floor is then a per-netdev TX mask
+-- (rate_mask_for), and the kernel refuses a mask holding none of the radio's
+-- basic rates (-EINVAL on ath9k and ath10k, a hAP ac, 2026-11-19). So:
+--   OFDM floor: the highest of 6/12/24 at or under it -- the rates every
+--   OFDM station must implement, so no WLAN's client is shut out -- plus 24
+--   under 24, which is what a genuine U7 advertised with a 12 Mbps floor
+--   ("Basic Rates 12, 24"; openUF had 12 alone). It lets control responses
+--   use 24.
+--   CCK floor (every WLAN admits 802.11b): the first rate at or above it.
+-- The cost of taking the strictest floor: an 802.11b-only station cannot
+-- join a WLAN whose own floor admits it when another WLAN on the radio is
+-- OFDM-only. Before, the most permissive floor was basic and the stricter
+-- WLANs were not enforced at all (2.4 GHz at 5.5 for every SSID because the
+-- guest one asked for 5.5).
+function M.basic_for(max_floor, allow_cck)
+	if not max_floor then return nil end
+	if max_floor >= 6000 then
+		local b
+		for _, r in ipairs({6000, 12000, 24000}) do
+			if r <= max_floor then b = r end
+		end
+		if b < 24000 then return {b, 24000} end
+		return {b}
+	end
+	if allow_cck ~= false then
+		for _, r in ipairs(CCK_RATES) do
+			if r >= max_floor then return {r} end
+		end
+	end
+	return {6000, 24000}
+end
+
+-- The legacy rates one WLAN transmits at: those at or above its own floor,
+-- plus the radio's lowest basic rate when the floor leaves every basic rate
+-- out (the kernel's condition, above). band is "2g" or "5g"; cck whether the
+-- radio has 802.11b rates at all. Returns a list in kb/s, or nil for none.
+function M.rate_mask_for(floor_kbps, band, cck, basic)
+	floor_kbps = tonumber(floor_kbps)
+	if not floor_kbps then return nil end
+	local ladder = {}
+	if band == "2g" and cck ~= false then
+		for _, r in ipairs(CCK_RATES) do ladder[#ladder + 1] = r end
+	end
+	for _, r in ipairs(OFDM_RATES) do ladder[#ladder + 1] = r end
+	local out, has_basic, low_basic = {}, false, nil
+	local is_basic = {}
+	for _, b in ipairs(basic or {}) do
+		b = tonumber(b)
+		if b then
+			is_basic[b] = true
+			if not low_basic or b < low_basic then low_basic = b end
+		end
+	end
+	for _, r in ipairs(ladder) do
+		if r >= floor_kbps then
+			out[#out + 1] = r
+			if is_basic[r] then has_basic = true end
+		end
+	end
+	if #out == 0 then return nil end
+	if not has_basic and low_basic then
+		table.insert(out, 1, low_basic)
+		table.sort(out)
+	end
+	return out
+end
+
 function M.derive_rates(floor_kbps, allow_cck, drop_below)
 	if not floor_kbps then return nil end
 	local ladder = {}
@@ -1052,11 +1121,7 @@ function M.derive_rates(floor_kbps, allow_cck, drop_below)
 	if #at_or_above == 0 then return nil end
 
 	local rates = {
-		-- The floor itself is the mandatory rate. Kept as a one-element list
-		-- rather than "every rate at or above the floor": each additional basic
-		-- rate is another rate a station must implement to associate, which
-		-- would exclude clients the controller never intended to exclude.
-		basic_rate   = {at_or_above[1]},
+		basic_rate   = M.basic_for(floor_kbps, allow_cck),
 		-- OpenWrt's legacy_rates is the 802.11b on/off switch; 0 is also what
 		-- the controller signals via pureg=1 on 2.4 GHz.
 		legacy_rates = (allow_cck == false) and "0" or "1",
@@ -2223,7 +2288,8 @@ function M.apply_config(resp, cfg, opts)
 				-- `~= false` made a single VAP with the key absent STRICT,
 				-- and flipped to permissive when a second identical VAP
 				-- appeared.
-				agg = {floor = vap.minrate_data, allow_cck = vap.minrate_cck,
+				agg = {floor = vap.minrate_data, strict = vap.minrate_data,
+					allow_cck = vap.minrate_cck,
 					drop_below = vap.minrate_below_disable == true,
 					beacon_rate = vap.beacon_rate}
 				rates_by_radio[vap.radio] = agg
@@ -2232,6 +2298,7 @@ function M.apply_config(resp, cfg, opts)
 					agg.floor = vap.minrate_data
 					agg.beacon_rate = vap.beacon_rate
 				end
+				if vap.minrate_data > agg.strict then agg.strict = vap.minrate_data end
 				if vap.minrate_cck ~= false then agg.allow_cck = true end
 				if not vap.minrate_below_disable then agg.drop_below = false end
 			end
@@ -2245,7 +2312,16 @@ function M.apply_config(resp, cfg, opts)
 			local agg = rates_by_radio[radio.name]
 			if agg then
 				rates = M.derive_rates(agg.floor, agg.allow_cck, agg.drop_below)
-				if rates then rates.beacon_rate = agg.beacon_rate end
+				if rates then
+					-- Basic from the strictest WLAN (basic_for); each WLAN's own
+					-- floor is its TX mask (openuf_minrate, apply_rate_masks).
+					-- The beacon goes out at the lowest basic rate: one below
+					-- it is a rate some admitted stations need not decode.
+					rates.basic_rate = M.basic_for(agg.strict, agg.allow_cck)
+					local low = rates.basic_rate[1]
+					rates.beacon_rate = (agg.beacon_rate and agg.beacon_rate > low)
+						and agg.beacon_rate or low
+				end
 			end
 			M.rf_config(radio.name, radio.htmode, radio.channel, radio.tx_power,
 				radio.min_rssi_enabled, radio.min_rssi, rates, radio.disabled,
@@ -2693,6 +2769,12 @@ function M.apply_config(resp, cfg, opts)
 				-- -mini/-basic wpad variants leave out. Written explicitly on
 				-- and off, mirroring bss_transition/mcast_enhance.
 				extra.proxy_arp = vap.proxy_arp and "1" or "0"
+			end
+			if vap.minrate_data then
+				-- This WLAN's own Minimum Data Rate, for its TX mask
+				-- (apply_rate_masks): the radio's basic rates come from the
+				-- strictest WLAN on it, the per-WLAN floor from here.
+				extra.openuf_minrate = tostring(vap.minrate_data)
 			end
 			if vap.roam_assist_enabled then
 				-- "Roaming Assistant" threshold in dBm, read back by
@@ -3702,6 +3784,67 @@ function M.set_radio_channel(radio, chan)
 	cursor:commit("wireless")
 	M._run_cmd("wifi reload")
 	return true
+end
+
+-- Each WLAN's Minimum Data Rate as a TX bitrate mask on its own netdev
+-- (`iw dev X set bitrates legacy-2.4|legacy-5 ...`), from the openuf_minrate
+-- stamp and the radio's basic rates. A mask lives on the netdev, so every
+-- `wifi reload` that recreates it drops it: the mask is applied again when
+-- the netdev's ifindex differs from the one it was set on. Called once a
+-- heartbeat; costs one ubus call and a sysfs read per stamped WLAN.
+-- Returns how many masks were (re)applied.
+M._masks = {}   -- ifname -> "ifindex|rates" last applied
+function M.apply_rate_masks()
+	local uci = get_uci()
+	local cursor = uci.cursor()
+	local want = {}
+	cursor:foreach("wireless", "wifi-iface", function(s)
+		local floor = tonumber(s.openuf_minrate)
+		local name = s[".name"]
+		if not (floor and name and s.device) or s.disabled == "1" then return end
+		local band = cursor:get("wireless", s.device, "band")
+		local cck = cursor:get("wireless", s.device, "legacy_rates") ~= "0"
+		local basic = cursor:get("wireless", s.device, "basic_rate")
+		if type(basic) == "string" then basic = {basic} end
+		local rates = M.rate_mask_for(floor, band, cck, basic)
+		local ifname = rates and M.ifname_for_section(name)
+		if ifname and util.valid_ifname(ifname) then
+			local mbps = {}
+			for i, r in ipairs(rates) do
+				mbps[i] = (r % 1000 == 0) and tostring(math.floor(r / 1000)) or string.format("%.1f", r / 1000)
+			end
+			want[ifname] = {band = band, list = table.concat(mbps, " ")}
+		end
+	end)
+	local n = 0
+	for ifname, w in pairs(want) do
+		local f = io.open("/sys/class/net/" .. ifname .. "/ifindex", "r")
+		local idx = f and f:read("*l")
+		if f then f:close() end
+		local key = tostring(idx) .. "|" .. w.list
+		if M._masks[ifname] ~= key then
+			local kind = (w.band == "2g") and "legacy-2.4" or "legacy-5"
+			local rc = M._run_cmd("iw dev " .. ifname .. " set bitrates " .. kind .. " " .. w.list .. " >/dev/null 2>&1")
+			if rc == 0 or rc == true then
+				M._masks[ifname] = key
+				n = n + 1
+				-- Once per netdev: there is no way to read a mask back.
+				io.stderr:write(("openuf: %s: Minimum Data Rate %s %s\n"):format(ifname, kind, w.list))
+			else
+				io.stderr:write(("openuf: %s: the kernel refused the rate mask %s %s -- "
+					.. "this WLAN keeps the radio's rates\n"):format(ifname, kind, w.list))
+				M._masks[ifname] = key   -- once per netdev, not every heartbeat
+			end
+		end
+	end
+	-- A WLAN whose floor went away: its mask is cleared, if the netdev is still there.
+	for ifname in pairs(M._masks) do
+		if not want[ifname] then
+			M._run_cmd("iw dev " .. ifname .. " set bitrates >/dev/null 2>&1")
+			M._masks[ifname] = nil
+		end
+	end
+	return n
 end
 
 -- The live netdev of a wifi-iface section, from `ubus call network.wireless

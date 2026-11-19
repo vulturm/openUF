@@ -8565,6 +8565,9 @@ function M._tick(st, cfg, ufhw, ctx)
 		M._replay_due = false
 		pcall(M._replay_last_push, st, cfg)
 	end
+	-- Each WLAN's own Minimum Data Rate (ucihelper.apply_rate_masks): again
+	-- whenever a reload recreated its netdev, which drops the mask.
+	if ufuci and ufuci.apply_rate_masks then pcall(ufuci.apply_rate_masks) end
 	-- The STUN client: a Binding Request every stun.INTERVAL, before the
 	-- inform so the reply's mapped address rides out on it.
 	pcall(M._stun_tick, st)

@@ -1246,11 +1246,15 @@ return {
 		end
 	},
 	{
-		name = "ucihelper: derive_rates makes the floor the sole basic rate",
+		name = "ucihelper: derive_rates makes the floor basic, and 24 Mbps above an OFDM floor",
 		fn = function()
 			local r = ucihelper.derive_rates(12000, false, false)
-			assert_eq(#r.basic_rate, 1, "exactly one basic rate")
+			assert_eq(#r.basic_rate, 2, "the floor and 24, as a U7 advertises")
 			assert_eq(r.basic_rate[1], 12000, "the floor itself is the basic rate")
+			assert_eq(r.basic_rate[2], 24000, "24 Mbps, which every OFDM station implements")
+			assert_eq(#ucihelper.derive_rates(24000, false, false).basic_rate, 1, "a 24 floor: 24 alone")
+			assert_eq(#ucihelper.derive_rates(36000, false, false).basic_rate, 1, "above 24: one basic rate")
+			assert_eq(#ucihelper.derive_rates(5500, true, false).basic_rate, 1, "a CCK floor: no 24, 802.11b stays in")
 			assert_eq(r.legacy_rates, "0", "CCK excluded -> legacy_rates off")
 			assert_eq(r.supported_rates, nil, "supported_rates untouched without drop_below")
 		end
@@ -1307,13 +1311,15 @@ return {
 		end
 	},
 	{
-		name = "ucihelper: apply_config takes the lowest floor across VAPs on one radio",
+		name = "ucihelper: apply_config makes the strictest WLAN's floor basic and stamps each WLAN's own",
 		fn = function()
 			with_ucihelper(function(db)
 				seed_radios()
-				-- Two WLANs share radio0 with different floors. Applying the
-				-- stricter 12 Mbps would lock out clients the 1 Mbps WLAN is
-				-- meant to admit, so the permissive floor has to win.
+				-- Two WLANs share radio0 with different floors, as a site's main
+				-- SSID (12) and guest SSID (1) do. hostapd's basic rates are the
+				-- radio's: they come from the strictest floor, limited to rates
+				-- every OFDM station implements, and each WLAN keeps its own
+				-- floor as a TX mask (openuf_minrate, apply_rate_masks).
 				local resp = {
 					radio_table = {{name = "radio0"}},
 					vap_table = {
@@ -1327,9 +1333,84 @@ return {
 				}
 				ucihelper.apply_config(resp, nil)
 				local r = db.wireless.radio0
-				assert_eq(r.basic_rate[1], "1000", "lowest floor wins")
-				assert_eq(r.legacy_rates, "1", "CCK allowed because one WLAN allows it")
+				assert_eq(r.basic_rate[1], "12000", "the strictest floor is basic")
+				assert_eq(r.basic_rate[2], "24000", "with 24, as a U7 advertises")
+				assert_eq(r.legacy_rates, "1", "CCK kept: one WLAN transmits at it")
 				assert_eq(r.supported_rates, nil, "not all WLANs asked to drop lower rates")
+				local stamps = {}
+				for _, sec in pairs(db.wireless) do
+					if sec.openuf_minrate then stamps[sec.ssid] = sec.openuf_minrate end
+				end
+				assert_eq(stamps.fast, "12000", "the main WLAN keeps 12")
+				assert_eq(stamps.iot, "1000", "the guest WLAN keeps its own 1")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: basic_for keeps the basic set to rates every station of the band implements",
+		fn = function()
+			local b = ucihelper.basic_for(12000, false)
+			assert_eq(table.concat(b, ","), "12000,24000", "12: 12 and 24")
+			assert_eq(table.concat(ucihelper.basic_for(18000, false), ","), "12000,24000", "18 is optional: 12 and 24")
+			assert_eq(table.concat(ucihelper.basic_for(24000, false), ","), "24000", "24 alone")
+			assert_eq(table.concat(ucihelper.basic_for(36000, false), ","), "24000", "above 24: 24, the highest mandatory")
+			assert_eq(table.concat(ucihelper.basic_for(5500, true), ","), "5500", "a CCK floor stays CCK")
+			assert_eq(ucihelper.basic_for(nil), nil, "no floor")
+		end
+	},
+	{
+		name = "ucihelper: rate_mask_for keeps a WLAN at its own floor and always holds a basic rate",
+		fn = function()
+			assert_eq(table.concat(ucihelper.rate_mask_for(12000, "2g", true, {"12000", "24000"}), ","),
+				"12000,18000,24000,36000,48000,54000", "12 and up")
+			assert_eq(table.concat(ucihelper.rate_mask_for(5500, "2g", true, {"12000", "24000"}), ","),
+				"5500,11000,6000,9000,12000,18000,24000,36000,48000,54000", "the guest WLAN keeps CCK")
+			assert_eq(table.concat(ucihelper.rate_mask_for(36000, "5g", false, {"24000"}), ","),
+				"24000,36000,48000,54000", "a floor above every basic rate gets the lowest one back")
+			assert_eq(ucihelper.rate_mask_for(nil, "5g", false, {}), nil, "no floor, no mask")
+		end
+	},
+	{
+		name = "ucihelper: apply_rate_masks sets each stamped WLAN's mask once per netdev, and clears it after",
+		fn = function()
+			with_ucihelper(function(db, cmds)
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "wifi-device")
+				c:set("wireless", "radio0", "band", "5g")
+				c:set("wireless", "radio0", "basic_rate", {"12000", "24000"})
+				c:set("wireless", "radio0", "legacy_rates", "0")
+				for name, v in pairs({g1 = {"guest", "24000"}, m1 = {"main", "12000"}}) do
+					c:set("wireless", name, "wifi-iface")
+					c:set("wireless", name, "device", "radio0")
+					c:set("wireless", name, "ssid", v[1])
+					c:set("wireless", name, "openuf_minrate", v[2])
+				end
+				local orig_ifs, orig_open = ucihelper.ifname_for_section, io.open
+				ucihelper.ifname_for_section = function(sec) return ({g1 = "phy0-ap1", m1 = "phy0-ap0"})[sec] end
+				local idx = "7"
+				io.open = function(path, mode)
+					if path:match("^/sys/class/net/.*/ifindex$") then
+						return {read = function() return idx end, close = function() end}
+					end
+					return orig_open(path, mode)
+				end
+				ucihelper._masks = {}
+				local ok, err = pcall(function()
+					assert_eq(ucihelper.apply_rate_masks(), 2, "both WLANs")
+					local all = table.concat(cmds, "\n")
+					assert_contains(all, "iw dev phy0-ap1 set bitrates legacy-5 24 36 48 54", "the guest WLAN at 24 and up")
+					assert_contains(all, "iw dev phy0-ap0 set bitrates legacy-5 12 18 24 36 48 54", "the main one at 12 and up")
+					assert_eq(ucihelper.apply_rate_masks(), 0, "nothing again while the netdevs stand")
+					idx = "9"
+					assert_eq(ucihelper.apply_rate_masks(), 2, "a reload recreated them: applied again")
+					c:delete("wireless", "g1", "openuf_minrate")
+					local before = #cmds
+					ucihelper.apply_rate_masks()
+					assert_contains(table.concat(cmds, "\n", before + 1), "iw dev phy0-ap1 set bitrates >", "the floor gone: mask cleared")
+				end)
+				ucihelper.ifname_for_section, io.open = orig_ifs, orig_open
+				ucihelper._masks = {}
+				if not ok then error(err, 0) end
 			end)
 		end
 	},

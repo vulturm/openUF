@@ -12,6 +12,13 @@ WLAN or a radio (`usteer`, `roamassist`, `shaper`, `minrssi`, `loadbalance`, `wl
   cover all of them; `get_ifname_for_vap` (singular) is only for something that addresses the
   hostapd BSS itself. A station seen on a VLAN netdev is kicked or BTM-requested through its
   BSS (`bss_ifname`), which is the only place hostapd listens.
+- **Minimum Data Rate is per WLAN on the wire and per radio in hostapd.** The radio's basic
+  rates come from the STRICTEST WLAN, limited to 6/12/24 (`basic_for`; plus 24 under 24, as a U7
+  advertises), and each WLAN's own floor is a TX mask on its netdev (`openuf_minrate` stamp,
+  `apply_rate_masks`, `iw dev X set bitrates`). The kernel refuses a mask holding none of the
+  radio's basic rates (-EINVAL, ath9k and ath10k), which is why the basic set stays mandatory
+  rates; a `wifi reload` drops every mask, so it is reapplied per ifindex each heartbeat. Before,
+  the most permissive floor won and a guest SSID's 5.5 put the whole 2.4 GHz radio at 5.5.
 - **Roaming Assistant and Band Steering share usteer but not its decision.** `usteer.lua`
   writes `band_steering_interval` (0 = off; the daemon default steers) and never the inert
   `band_steering_threshold`; `roamassist.lua` reads usteer's cross-AP table and sends its own
