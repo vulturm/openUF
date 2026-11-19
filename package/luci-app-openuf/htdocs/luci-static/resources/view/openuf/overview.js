@@ -284,8 +284,8 @@ function actions(status) {
 			_('openUF restarted. The controller sees a pause of a few seconds and nothing else changes.'));
 	}) }, _('Restart openUF'));
 	const scan = E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(this, function() {
-		return run('/usr/bin/openuf', ['11k-scan'], _('Scan'),
-			_('Scan requested. openUF sweeps every radio within the next ten seconds and reports the result to the controller; clients notice a short pause.'));
+		return run('/usr/bin/openuf', ['scan-now'], _('Scan'),
+			_('Scan requested. openUF starts within ten seconds, a few channels per heartbeat, and reports to the controller; clients notice a short pause. A radio carrying a wireless uplink is left out.'));
 	}) }, _('Scan for nearby networks now'));
 	const reset = E('button', { 'class': 'btn cbi-button cbi-button-negative', 'click': function() {
 		ui.showModal(_('Forget the controller?'), [

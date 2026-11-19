@@ -50,6 +50,9 @@
 				"/usr/bin/openuf 11k-scan": [
 					"exec"
 				],
+				"/usr/bin/openuf scan-now": [
+					"exec"
+				],
 				"/proc/cpuinfo": [
 					"read"
 				]
