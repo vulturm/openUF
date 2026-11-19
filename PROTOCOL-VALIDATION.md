@@ -741,10 +741,11 @@ feature 27 in the matrix.
 no dBm for Low, Medium or High: captured on a hAP ac, all four of Low → Medium → High → Auto
 arrived as the mode beside the last Custom value (`txpower=1`), and a radio never set to Custom
 carried `txpower=auto` under `medium`. openUF used to apply `txpower` alone, so every mode but
-Custom kept that 1 dBm. Now `auto` deletes UCI `txpower` (the driver's maximum), `custom` takes
-the number, and Low/Medium/High become 30/60/90 % of the band's maximum dBm as `iw phy` lists it
-(`ucihelper.TX_POWER_SHARE`; openUF's choice: the UniFi firmware's own mapping lives in
-`ubntbox` and has not been read). When no radio is
+Custom kept that 1 dBm. Now `custom` takes the number, and Low/Medium/High/Auto become
+30/60/90/85 % of the band's maximum dBm as `iw phy` lists it (`ucihelper.TX_POWER_SHARE`;
+openUF's choice: the UniFi firmware's own mapping lives in `ubntbox` and has not been read, and
+OpenWrt has no automatic power control for Auto to mean). Auto with no maximum known deletes UCI
+`txpower` (the driver's own) rather than strand an earlier dBm. When no radio is
 provisionable the blob contains the literal comment `# no wlan provisioned as no radio found`
 and the **unindexed** `radio.status=disabled` — see
 [`radio_table` must not be empty](#radio_table-entry).

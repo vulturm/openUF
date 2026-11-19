@@ -1164,7 +1164,7 @@ return {
 		end
 	},
 	{
-		name = "ucihelper: rf_config turns Low/Medium/High into a share of the band's maximum dBm",
+		name = "ucihelper: rf_config turns Auto/Low/Medium/High into a share of the band's maximum dBm",
 		fn = function()
 			with_ucihelper(function(db)
 				seed_radios()
@@ -1183,10 +1183,12 @@ return {
 				ucihelper.rf_config("radio1", nil, nil, "medium")
 				assert_eq(db.wireless.radio1.txpower, "14", "the 5 GHz band's own maximum")
 				ucihelper.rf_config("radio0", nil, nil, "auto")
-				assert_nil(db.wireless.radio0.txpower, "auto: the driver's maximum")
+				assert_eq(db.wireless.radio0.txpower, "25", "auto: 85%, a little under high")
 				caps = {}
 				ucihelper.rf_config("radio1", nil, nil, "low")
 				assert_eq(db.wireless.radio1.txpower, "14", "no maximum known: left as it was")
+				ucihelper.rf_config("radio0", nil, nil, "auto")
+				assert_nil(db.wireless.radio0.txpower, "auto, no maximum known: the driver's own")
 				ucihelper.phy_caps = orig
 			end)
 		end
