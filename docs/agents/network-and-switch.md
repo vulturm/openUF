@@ -68,5 +68,15 @@ The bridge-MAC and `lan_cpueth` rules are in [device-maps.md](device-maps.md).
   on a DFS channel sat like that for hours. `backhaul.check_ap_stall` says so once in the log
   and as `ap_stall=<radio>:<channel>:dfs|unknown` in `/tmp/openuf-status`; it blames DFS only
   when `iw phy` shows the channel radar-flagged and not `available`, and a CAC in progress
-  (hostapd status `DFS`) is not a stall. It reports, it does not fix: the cure is a non-DFS
-  parent channel or clients on another radio, both the operator's call.
+  (hostapd status `DFS`) is not a stall. By default it only reports; the cure is a non-DFS
+  parent channel or clients on another radio, both the operator's call. **`dfs_cac_recover =
+  true` also clears it** (`cac_start`/`cac_step`): the uplink station is switched off in UCI
+  (the wired-first switch), hostapd's ORDINARY start runs the CAC -- its apsta start never does,
+  it only sets the beacon, which is how the stall arises -- and the station comes back once an
+  AP beacons or after `CAC_MAX`. The AP is offline meanwhile (~1 min FCC, 10 min on ETSI's
+  120-128), hence opt-in. Three things guarantee the station comes back: the job in
+  `state.json` (`backhaul_cac`, finished by the first tick after a restart or reboot), a failsafe
+  shell spawned before the switch that acts while `/var/run/openuf.cac` exists, and a wired
+  uplink closing the job without re-enabling anything. Attempts back off (`RETRY_BASE` doubled
+  per attempt that did not hold, to `RETRY_MAX`): on ETSI the cleared state may lapse during the
+  rejoin's reload, and a loop of outages is worse than the stall. Not yet run on hardware.

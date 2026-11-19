@@ -218,6 +218,17 @@ config = {
 	-- to beacon openUF's element alone.
 	unifi_sibling_ie = true,
 
+	-- A wireless (mesh) child whose parent moves to a DFS channel this radio
+	-- has not cleared ends up with no SSID on that band: the APs need a radar
+	-- check (CAC) there, and it cannot run while the uplink station holds the
+	-- radio. openUF always says so (log, /tmp/openuf-status `ap_stall=`).
+	-- true also clears it: the uplink station goes off, the APs run the CAC,
+	-- the station comes back. The AP is OFFLINE meanwhile -- about a minute,
+	-- or ten on the EU weather-radar channels 120-128 -- each time the parent
+	-- lands on such a channel; retried at most every 30 min, backing off to
+	-- 6 h when it does not hold. Off by default for that reason.
+	dfs_cac_recover = false,
+
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->
 	-- Device Authentication). true creates the site's device login on this
 	-- AP with the password the controller pushes (as a hash), and removes it
