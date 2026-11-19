@@ -7922,6 +7922,14 @@ function M._write_status(st, fields)
 		lines[#lines + 1] = "rollback=" .. tostring(s.rollback)
 		lines[#lines + 1] = "rollback_msg=" .. tostring(s.rollback_msg or ""):gsub("[\r\n]", " ")
 	end
+	-- A wireless child whose APs cannot start on the parent's channel
+	-- (backhaul.check_ap_stall): healthy informs, nothing on the air. Only while
+	-- it lasts, as <radio>:<channel>:<dfs|unknown>.
+	local stall = M._backhaul and M._backhaul.ap_stall
+	if type(stall) == "table" then
+		lines[#lines + 1] = ("ap_stall=%s:%s:%s"):format(tostring(stall.radio),
+			tostring(stall.channel), tostring(stall.reason))
+	end
 	local tmp = M.STATUS_FILE .. ".tmp"
 	local f = io.open(tmp, "w")
 	if not f then return false end

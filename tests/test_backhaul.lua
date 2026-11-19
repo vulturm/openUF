@@ -473,6 +473,121 @@ return {
 		end
 	},
 	{
+		name = "backhaul: phy_aps() lists a phy's AP interfaces and which beacon, leaving out AP/VLANs and other phys",
+		fn = function()
+			-- `iw dev` on a stalled hAP ac: neither AP has an ssid line.
+			local stalled = table.concat({
+				"phy#1",
+				"\tInterface phy1-ap0", "\t\tssid other", "\t\ttype AP",
+				"phy#0",
+				"\tInterface phy0-ap1-21", "\t\ttype AP/VLAN",
+				"\tInterface phy0-ap1", "\t\ttype AP", "\t\ttxpower 27.00 dBm",
+				"\tInterface phy0-sta0", "\t\tssid vwire-x", "\t\ttype managed",
+				"\t\tchannel 124 (5620 MHz), width: 80 MHz, center1: 5610 MHz",
+				"\tInterface phy0-ap0", "\t\ttype AP", "\t\ttxpower 27.00 dBm",
+			}, "\n")
+			local aps = backhaul.phy_aps(stalled, "phy0")
+			assert_eq(#aps, 2, "two APs on phy0, the AP/VLAN and the station left out")
+			assert_eq(aps[1].ifname, "phy0-ap1", "first AP")
+			assert_eq(aps[2].ifname, "phy0-ap0", "second AP")
+			assert_true(not aps[1].beaconing and not aps[2].beaconing, "neither beacons")
+			local up = stalled:gsub("\tInterface phy0%-ap0\n", "\tInterface phy0-ap0\n\t\tssid eG\n")
+			assert_true(backhaul.phy_aps(up, "phy0")[2].beaconing, "an ssid line is a started AP")
+			assert_eq(#backhaul.phy_aps(stalled, "phy7"), 0, "an unknown phy has none")
+		end
+	},
+	{
+		name = "backhaul: channel_dfs() reads the radar flag and DFS state of one channel",
+		fn = function()
+			local ch = table.concat({
+				"Band 2:",
+				"\t* 5600 MHz [120] ", "\t  Radar detection", "\t  DFS state: available (for 9 sec)",
+				"\t* 5620 MHz [124] ", "\t  Maximum TX power: 27.0 dBm", "\t  Radar detection",
+				"\t  Channel widths: 20MHz HT40- HT40+ VHT80", "\t  DFS state: usable (for 36212 sec)",
+				"\t* 5745 MHz [149] ", "\t  Maximum TX power: 30.0 dBm",
+			}, "\n")
+			local d = backhaul.channel_dfs(ch, 5620)
+			assert_true(d.radar, "124 is a radar channel")
+			assert_eq(d.state, "usable", "never cleared")
+			assert_eq(backhaul.channel_dfs(ch, 5600).state, "available", "the neighbour's own state, not 124's")
+			local c = backhaul.channel_dfs(ch, 5745)
+			assert_true(not c.radar and c.state == nil, "149 is no DFS channel")
+			assert_nil(backhaul.channel_dfs(ch, 5180), "an unlisted channel is unknown")
+		end
+	},
+	{
+		name = "backhaul: check_ap_stall() names the DFS cause once, after STALL_TICKS, and clears when the APs beacon",
+		fn = function()
+			local o_popen, o_read, o_log = backhaul._popen, backhaul._read_file, backhaul._log
+			local logs, beacon, hostapd = {}, false, '{ "status": "ENABLED" }'
+			local link = "Connected to 00:00:5e:00:53:80 (on phy0-sta0)\n\tfreq: 5620.0\n"
+			backhaul._popen = function(cmd)
+				if cmd == "iw dev phy0-sta0 link" then return link end
+				if cmd == "iw dev" then
+					return "phy#0\n\tInterface phy0-ap0\n" .. (beacon and "\t\tssid eG\n" or "") .. "\t\ttype AP\n"
+				end
+				if cmd:match("^ubus call hostapd%.phy0%-ap0 get_status") then return hostapd end
+				if cmd == "iw phy phy0 channels" then
+					return "\t* 5620 MHz [124] \n\t  Radar detection\n\t  DFS state: usable (for 3 sec)\n"
+				end
+				error("unexpected command " .. cmd)
+			end
+			backhaul._read_file = function(path)
+				assert_eq(path, "/sys/class/net/phy0-sta0/phy80211/name", "the station's phy")
+				return "phy0\n"
+			end
+			backhaul._log = function(m) logs[#logs + 1] = m end
+			backhaul._stall_ticks, backhaul.ap_stall = 0, nil
+			local r1 = backhaul.check_ap_stall("phy0-sta0", "radio0")
+			local r2 = backhaul.check_ap_stall("phy0-sta0", "radio0")
+			local r3 = backhaul.check_ap_stall("phy0-sta0", "radio0")
+			local r4 = backhaul.check_ap_stall("phy0-sta0", "radio0")
+			assert_nil(r1, "one silent heartbeat is a reload, not a stall")
+			assert_nil(r2, "two neither")
+			assert_eq(r3 and r3.reason, "dfs", "the third names DFS")
+			assert_eq(r3.channel, 124, "on the parent's channel")
+			assert_eq(r3.dfs_state, "usable", "and why")
+			assert_eq(r4, r3, "still stalled")
+			assert_eq(#logs, 1, "said once, not every heartbeat")
+			assert_true(logs[1]:find("DFS channel 124", 1, true) ~= nil, "the log names the cause")
+			beacon = true
+			assert_nil(backhaul.check_ap_stall("phy0-sta0", "radio0"), "beaconing again")
+			assert_nil(backhaul.ap_stall, "cleared")
+			assert_true(logs[2]:find("on the air again", 1, true) ~= nil, "and said so")
+			-- A CAC hostapd is running is not a stall.
+			beacon, hostapd = false, '{ "status": "DFS" }'
+			for _ = 1, 5 do assert_nil(backhaul.check_ap_stall("phy0-sta0", "radio0"), "CAC running") end
+			-- No link: nothing to judge.
+			hostapd, link = '{ "status": "ENABLED" }', "Not connected.\n"
+			for _ = 1, 5 do assert_nil(backhaul.check_ap_stall("phy0-sta0", "radio0"), "station down") end
+			backhaul._popen, backhaul._read_file, backhaul._log = o_popen, o_read, o_log
+			backhaul._stall_ticks, backhaul.ap_stall = 0, nil
+		end
+	},
+	{
+		name = "backhaul: check_ap_stall() says unknown, not DFS, on a channel that needs no CAC",
+		fn = function()
+			local o_popen, o_read, o_log = backhaul._popen, backhaul._read_file, backhaul._log
+			local logs = {}
+			backhaul._popen = function(cmd)
+				if cmd == "iw dev phy0-sta0 link" then return "Connected to 00:00:5e:00:53:80\n\tfreq: 5745.0\n" end
+				if cmd == "iw dev" then return "phy#0\n\tInterface phy0-ap0\n\t\ttype AP\n" end
+				if cmd:match("^ubus call hostapd") then return '{ "status": "ENABLED" }' end
+				if cmd == "iw phy phy0 channels" then return "\t* 5745 MHz [149] \n\t  Maximum TX power: 30.0 dBm\n" end
+				error("unexpected command " .. cmd)
+			end
+			backhaul._read_file = function() return "phy0" end
+			backhaul._log = function(m) logs[#logs + 1] = m end
+			backhaul._stall_ticks, backhaul.ap_stall = 0, nil
+			local r
+			for _ = 1, backhaul.STALL_TICKS do r = backhaul.check_ap_stall("phy0-sta0", "radio0") end
+			backhaul._popen, backhaul._read_file, backhaul._log = o_popen, o_read, o_log
+			backhaul._stall_ticks, backhaul.ap_stall = 0, nil
+			assert_eq(r and r.reason, "unknown", "no radar flag: the cause is not guessed")
+			assert_true(logs[1]:find("DFS", 1, true) == nil, "and the log does not blame DFS")
+		end
+	},
+	{
 		name = "backhaul: pin_parent_channel() overrides the pushed channel on the uplink radio only while wireless",
 		fn = function()
 			local uf = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = false}}, "phy0-sta0")

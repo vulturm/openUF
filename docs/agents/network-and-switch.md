@@ -55,3 +55,12 @@ The bridge-MAC and `lan_cpueth` rules are in [device-maps.md](device-maps.md).
   before the port, port out before the guard, one atomic `nft -f` (not `util.nft_apply`,
   whose fallback deletes the table first). Never move that port into UCI: netifd would
   bring it up at boot, before any guard exists.
+- **A wireless child under a parent on a DFS channel may have no SSID on the air at all.** The
+  station drags the radio to the parent's channel and hostapd's apsta start needs a CAC there,
+  which cannot run while the station holds the radio; the kernel refuses the beacon (`Failed to
+  set beacon parameters`) and hostapd still says ENABLED. A hAP ac (ath10k) under a UniFi parent
+  on a DFS channel sat like that for hours. `backhaul.check_ap_stall` says so once in the log
+  and as `ap_stall=<radio>:<channel>:dfs|unknown` in `/tmp/openuf-status`; it blames DFS only
+  when `iw phy` shows the channel radar-flagged and not `available`, and a CAC in progress
+  (hostapd status `DFS`) is not a stall. It reports, it does not fix: the cure is a non-DFS
+  parent channel or clients on another radio, both the operator's call.
