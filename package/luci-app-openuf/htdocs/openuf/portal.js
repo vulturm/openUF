@@ -578,7 +578,16 @@
 			h('div', { class: 'group-title' }, 'Radio environment'),
 			row('Ask clients to scan', 'Have one capable client at a time report the networks it hears. The access point never leaves its channel; the client does, for about a second.', toggle('rrm_enrichment', '1', ro), { inline: true }),
 			row('Scan for neighbouring networks', 'The access point scans a few channels at a time, under half a second off the air each, so the controller\'s Environment view and the neighbour lists see other channels. On a wireless (mesh) uplink the radio carrying it is never scanned, so the uplink is not interrupted.',
-				select('neighbour_scan_interval', '0', scanSteps, ro))
+				select('neighbour_scan_interval', '0', scanSteps, ro)),
+			row('Scan now', 'One scan right away, the same as above. The neighbour lists are rewritten when it ends, in about a minute.',
+				h('button', { class: 'btn', onclick: async () => {
+					await exec('/usr/bin/openuf', ['scan-now'], 'Scan started. The neighbour lists update in about a minute.');
+					// Long enough for a 2.4 GHz sweep (13 channels, four per
+					// heartbeat): then the Roaming group shows what it found.
+					setTimeout(async () => {
+						try { settings.roaming = await ubus(sid, 'luci.openuf', 'getRoaming'); renderSettings(); } catch (e) { /* the next load shows it */ }
+					}, 75000);
+				} }, 'Scan now'), { inline: true })
 		));
 
 		groups.push(h('div', { class: 'group card' },
