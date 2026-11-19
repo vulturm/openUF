@@ -56,6 +56,12 @@ sh tools/deploy.sh <ap-ip>...           # OPENUF_SSH_PASS=... for a password-pro
 # which on a device that also has the package installed is the dormant copy.
 sh tools/hotpatch.sh [--repush] <ap-ip>  # --repush blanks cfgversion for a full config push
 
+# An AP's dependencies: the feed packages setup.sh installs (installed ones only, no
+# kmods, the uhttpd family as one) and rrb-unifi at setup.sh's pin, fetched on this host
+make deps-update                     # move the rrb-unifi pin, only if both suites pass
+make deps-check HOST=<ap-ip>         # read-only (refreshes the AP's package index)
+make deps-deploy HOST=<ap-ip>        # sh tools/deps.sh: upgrade them; a wpad upgrade restarts the radios
+
 # Shell syntax — BOTH, every time (see "Shell code" below); `make sh-check` does all of them
 bash -n setup.sh && dash -n setup.sh
 ```
