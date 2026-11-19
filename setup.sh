@@ -67,6 +67,9 @@ RRB_UNIFI_TAG=${RRB_UNIFI_TAG:-v1.5.1}
 # tampered archive refuses to install (RRB_UNIFI_UNVERIFIED=1 overrides).
 RRB_UNIFI_PLUGIN_SHA256=b17b3904c66fa6626d0220db3b62ba1cdbf0318ef0bf346cdb8835ff3fd0ae84
 RRB_UNIFI_PINNED_TAG=v1.5.1
+# Defaulted because setup.sh runs under `set -u`: unset, the sha check below
+# aborted the whole install right after the archive downloaded.
+RRB_UNIFI_UNVERIFIED=${RRB_UNIFI_UNVERIFIED:-}
 RRB_UNIFI_DIR=${RRB_UNIFI_DIR:-}
 OPENUF_PKG_DIR=${OPENUF_PKG_DIR:-}
 export OPENUF_REPO OPENUF_REF OPENUF_TARBALL_URL OPENUF_SELF_URL OPENUF_RELEASE_URL
