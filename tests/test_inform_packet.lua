@@ -10010,4 +10010,44 @@ return {
 			assert_eq(inform._tx_power_from_wire(nil, "auto"), "auto", "txpower=auto alone: auto")
 		end
 	},
+	{
+		name = "inform: _regd_tick warns once when a radio's driver applies another regdomain than UCI's",
+		fn = function()
+			local o = {inform._ucihelper, inform._sysinfo, inform._read_file}
+			local up = {radio0 = "phy0-sta0", radio1 = nil}
+			local reg = "global\ncountry HK: DFS-ETSI\n\nphy#1\ncountry US: DFS-FCC\n\nphy#0\ncountry US: DFS-FCC\n"
+			inform._ucihelper = {
+				get_radio_table = function() return {{name = "radio0"}, {name = "radio1"}} end,
+				radio_country = function() return "HK" end,
+				get_ifname_for_radio = function(r) return up[r] end,
+			}
+			inform._sysinfo = {
+				regdomains = function(t) return dofile("openuf/sysinfo.lua").regdomains(t) end,
+				_run_cmd = function(cmd) assert_eq(cmd, "iw reg get", "asks the kernel"); return reg end,
+			}
+			inform._read_file = function(p)
+				return ({["/sys/class/net/phy0-sta0/phy80211/name"] = "phy0\n",
+					["/sys/class/net/phy1-ap0/phy80211/name"] = "phy1\n"})[p]
+			end
+			inform._regd_pending, inform._regd_warned, inform._regd_mismatch = true, {}, nil
+			local out = with_stderr(function() inform._regd_tick(nil) end)
+			assert_contains(out, "radio0 runs under regulatory domain US, not HK", "named, with both domains")
+			assert_eq(inform._regd_mismatch, "radio0:US!=HK", "kept for the status file")
+			assert_true(inform._regd_pending, "radio1 not up yet: asked again next heartbeat")
+			up.radio1 = "phy1-ap0"
+			out = with_stderr(function() inform._regd_tick(nil) end)
+			assert_true(not out:find("radio0 runs", 1, true), "said once per radio and pair")
+			assert_contains(out, "radio1 runs under regulatory domain US, not HK", "the second radio")
+			assert_eq(inform._regd_mismatch, "radio0:US!=HK,radio1:US!=HK", "both")
+			assert_false(inform._regd_pending, "every radio judged: done until the next push")
+			-- A board whose radios follow UCI's domain says nothing.
+			reg = "global\ncountry HK: DFS-ETSI\n"
+			inform._regd_pending, inform._regd_warned = true, {}
+			out = with_stderr(function() inform._regd_tick(nil) end)
+			assert_eq(out, "", "agreement: silent")
+			assert_nil(inform._regd_mismatch, "nothing for the status file")
+			inform._ucihelper, inform._sysinfo, inform._read_file = o[1], o[2], o[3]
+			inform._regd_pending, inform._regd_warned, inform._regd_mismatch = true, {}, nil
+		end
+	},
 }

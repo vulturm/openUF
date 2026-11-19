@@ -3673,6 +3673,13 @@ function M.backhaul_set_uplink_enabled(enabled)
 	return changed
 end
 
+-- The regulatory domain UCI programs for a radio (its `country`), or nil.
+function M.radio_country(radio)
+	if type(radio) ~= "string" then return nil end
+	local c = get_uci().cursor():get("wireless", radio, "country")
+	return (type(c) == "string" and c ~= "") and c:upper() or nil
+end
+
 -- A radio's configured channel, as UCI holds it (a number or "auto").
 function M.radio_channel(radio)
 	if type(radio) ~= "string" then return nil end

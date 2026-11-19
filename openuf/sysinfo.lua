@@ -1110,6 +1110,33 @@ local function parse_phy_info(phy_info)
 	return caps
 end
 
+-- `iw reg get`, parsed: the global regulatory domain and the one each phy
+-- keeps of its own, {global = "HK", phys = {phy0 = "US"}}. A phy listed with
+-- its own country is one whose driver holds a regdomain of its own (an
+-- EEPROM-locked ath9k/ath10k without OpenWrt's ATH_USER_REGD, a self-managed
+-- radio); one not listed follows the global domain. nil for no input.
+function M.regdomains(text)
+	if type(text) ~= "string" or text == "" then return nil end
+	local out, section = {phys = {}}, nil
+	for line in text:gmatch("[^\n]+") do
+		if line:match("^global") then
+			section = "global"
+		else
+			local phy = line:match("^(phy)#(%d+)")
+			if phy then
+				section = "phy" .. line:match("^phy#(%d+)")
+			else
+				local cc = line:match("^country (%w%w):")
+				if cc and section then
+					if section == "global" then out.global = cc else out.phys[section] = cc end
+					section = nil
+				end
+			end
+		end
+	end
+	return out
+end
+
 -- Returns the phy dump's text and the hardware capabilities parsed out of it.
 function M._phy_info(phy)
 	local now = M._time()

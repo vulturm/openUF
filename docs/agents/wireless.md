@@ -64,6 +64,13 @@ WLAN or a radio (`usteer`, `roamassist`, `shaper`, `minrssi`, `loadbalance`, `wl
   stamping the controller's own value in `openuf_country`, which `get_radio_table` reports
   in preference, so the controller's site setting does not appear to change. Removing the
   override reverses both halves; never leave a foreign regdomain programmed silently.
+- **A driver may keep a regdomain of its own, whatever UCI says.** `iw reg get` lists such a
+  phy with its own `country` line (an EEPROM-locked ath9k/ath10k built without OpenWrt's
+  `ATH_USER_REGD`: the hAP ac runs global HK, phy0 and phy1 US), and its limits win -- channels,
+  power (29 dBm on 2.4 GHz under an ETSI site), CAC time. Nothing in userspace lifts it, and
+  `country_override` cannot either. `inform._regd_tick` says so once per radio and pair and
+  keeps `regd_mismatch=<radio>:<have>!=<want>` in `/tmp/openuf-status`; it re-checks after
+  every push.
 - **160 MHz on 5 GHz needs working DFS** (or a regdomain that flags none), whatever `iw phy` claims. Every 160 MHz block is
   8 contiguous channels and every one that fits overlaps DFS (ch36 → seg0=50 spans 36–64;
   ch100 → 114 spans 100–128); the clear 149–173 range is only 140 MHz wide. So on a board
