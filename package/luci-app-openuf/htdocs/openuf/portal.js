@@ -483,10 +483,15 @@
 					h('strong', {}, 'Ignored on this access point:'), h('ul', { class: 'todo' }, items()),
 					h('p', { class: 'todo' }, 'Clients are not moved to 5 GHz or away from a weak access point here; they roam by themselves.'))));
 		}
-		rows.push(row('openUF\'s neighbour list', r && r.usteer
-			? 'Used once usteer stops. Answers 802.11k requests with the site\'s other access points.'
+		// While usteer runs it rewrites every list each second and openUF's is
+		// not used (inform._nrlist_tick yields): the switch is shown greyed out
+		// rather than looking like it does something. It stays in UCI, so it
+		// is back in force the moment usteer stops.
+		const usteerOwns = !!(r && r.usteer);
+		rows.push(row('openUF\'s neighbour list', usteerOwns
+			? 'Inactive while usteer keeps the lists. Turn off “Follow the controller\'s steering” above to use it.'
 			: 'Answer 802.11k requests with the site\'s other access points, so clients roam to the right one.',
-			toggle('neighbour_list', '1', ro), { inline: true }));
+			toggle('neighbour_list', '1', ro || usteerOwns), { inline: true }));
 		for (const b of (r && r.bss) || []) {
 			const parts = [];
 			if (!b.rrm) parts.push('802.11k off');
