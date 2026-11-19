@@ -4912,6 +4912,7 @@ function M.handle_response(json_str, st, cfg)
 							roam_assist_active = roam_assist_active,
 							device_name = device_name, keep_vlans = port_vlans,
 							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac, M._peer_sysid(cfg)),
+							ap_off_radios = M._ap_off_radios(st, cfg),
 							backhaul = backhaul_plan})
 					M._deny_reloaded()   -- apply_config ran `wifi reload`
 				end
@@ -6967,7 +6968,42 @@ end
 -- on a device whose push carried no uplink station.
 function M._backhaul_tick(st, cfg)
 	if not (M._backhaul and M._backhaul.tick) then return nil end
-	return M._backhaul.tick(st, cfg, M._ucihelper, M._sysinfo, M._state)
+	local before = st and st.backhaul_mode
+	local mode = M._backhaul.tick(st, cfg, M._ucihelper, M._sysinfo, M._state)
+	-- With uplink_radio_aps off, which radio carries no SSIDs depends on the
+	-- uplink: a switch between wire and air needs the WLANs pushed again, and
+	-- the controller would never send them unasked (cfgversion matches).
+	if mode and before and mode ~= before and M._uplink_radio_aps_off(cfg)
+			and st.adopted and st.cfgversion ~= "" then
+		st.cfgversion = ""
+		M._state.save(st)
+		io.stderr:write("openuf: the uplink went " .. tostring(mode)
+			.. " -- asking the controller for the WLANs again (uplink_radio_aps)\n")
+	end
+	return mode
+end
+
+-- ─── uplink_radio_aps ────────────────────────────────────────────────────────
+
+-- conf.lua `uplink_radio_aps = false`: while the uplink is wireless, the radio
+-- the station rides carries no SSID of ours. The controller cannot ask for it
+-- -- its radio switch is greyed out on the uplink band of a meshed AP, as it is
+-- for a genuine one, because the radio IS the uplink -- and a WLAN band or AP
+-- group would change the site for every AP to fix one. The WLAN sections are
+-- still written, with disabled=1 (what a WLAN switched off in the controller
+-- gets), so the next push after the uplink goes wired brings them back whole.
+-- Absent or true: the controller's WLANs on every radio, as before.
+function M._uplink_radio_aps_off(cfg)
+	return cfg and cfg.config and cfg.config.uplink_radio_aps == false or false
+end
+
+-- {radio = true} for the radio whose WLANs stay off this push, or nil.
+function M._ap_off_radios(st, cfg)
+	if not M._uplink_radio_aps_off(cfg) then return nil end
+	local radio = M._backhaul and M._backhaul.uplink_radio
+		and M._backhaul.uplink_radio(st, M._ucihelper) or nil
+	if not radio then return nil end
+	return {[radio] = true}
 end
 
 -- The VLANs a push's tagged SSIDs sit on, each once, in push order: the

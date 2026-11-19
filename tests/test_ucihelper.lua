@@ -1461,6 +1461,29 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: apply_config writes the uplink radio's WLANs disabled when opts.ap_off_radios names it",
+		fn = function()
+			with_ucihelper(function(db)
+				local resp = {
+					radio_table = {},
+					vap_table = {
+						{ssid = "corp", radio = "radio0", security = "wpa2", x_passphrase = "hunter22"},
+						{ssid = "corp", radio = "radio1", security = "wpa2", x_passphrase = "hunter22"},
+						{ssid = "lab", radio = "radio0", security = "wpa2", x_passphrase = "hunter22",
+						 disabled = false},
+					},
+				}
+				ucihelper.apply_config(resp, nil, {ap_off_radios = {radio0 = true}})
+				assert_eq(db.wireless.openuf_radio0_corp.disabled, "1", "the uplink radio's WLAN is off")
+				assert_eq(db.wireless.openuf_radio0_corp.ssid, "corp", "but written whole")
+				assert_eq(db.wireless.openuf_radio0_lab.disabled, "1", "even one the controller has on")
+				assert_true(db.wireless.openuf_radio1_corp.disabled ~= "1", "the other radio serves it")
+				ucihelper.apply_config(resp, nil, {})
+				assert_true(db.wireless.openuf_radio0_corp.disabled ~= "1", "the next push without it: back on")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_config writes proxy_arp from vap.proxy_arp",
 		fn = function()
 			with_ucihelper(function(db)

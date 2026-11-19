@@ -78,3 +78,11 @@ The bridge-MAC and `lan_cpueth` rules are in [device-maps.md](device-maps.md).
   it worked). Taking the station down for the CAC also works but costs the uplink, and the
   `wifi reload` that brings it back throws the cleared state away. Attempts back off
   (`RETRY_BASE` doubled per attempt that did not hold, to `RETRY_MAX`).
+- **The controller cannot take SSIDs off a meshed AP's uplink band; `uplink_radio_aps = false`
+  can.** Its radio switch is greyed out on the uplink band, as for a genuine AP: the radio IS the
+  uplink. With the option off and the uplink wireless, `inform._ap_off_radios` hands
+  `apply_config` that radio and its WLAN sections are written whole with `disabled=1` (what a
+  WLAN switched off in the controller gets); the station is a backhaul section and untouched. A
+  switch between wire and air blanks `cfgversion` (`_backhaul_tick`), because which radio is
+  free depends on it and the controller never re-pushes unasked. With no AP on that radio there
+  is nothing for `check_ap_stall` to find, so a DFS parent costs nothing.
