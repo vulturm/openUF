@@ -7088,6 +7088,31 @@ return {
 		end
 	},
 	{
+		name = "inform: the last configuration push is kept in RAM and replayed when a push-time option changes",
+		fn = function()
+			local o = {inform.LAST_PUSH_FILE, inform.handle_response, inform._chmod600}
+			inform.LAST_PUSH_FILE = os.tmpname()
+			os.remove(inform.LAST_PUSH_FILE)
+			local modes = {}
+			inform._chmod600 = function(p) modes[#modes + 1] = p end
+			local ok, err = pcall(function()
+				assert_false(inform._replay_last_push({}, {}), "nothing saved: nothing replayed")
+				local body = '{"_type":"setparam","system_cfg":"x=1"}'
+				assert_true(inform._save_last_push(body), "saved")
+				assert_eq(modes[1], inform.LAST_PUSH_FILE .. ".tmp", "owner-only before the body is written")
+				local got, replaying
+				inform.handle_response = function(s) got = s; replaying = inform._replaying; return true end
+				assert_true(inform._replay_last_push({}, {}), "replayed")
+				assert_eq(got, body, "the very push")
+				assert_true(replaying, "flagged, so the replay does not save itself again")
+				assert_eq(inform._replaying, false, "and the flag is cleared after")
+			end)
+			os.remove(inform.LAST_PUSH_FILE)
+			inform.LAST_PUSH_FILE, inform.handle_response, inform._chmod600 = o[1], o[2], o[3]
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: device Band Steering prefer_5g turns steering on; off and equal leave per-WLAN alone",
 		fn = function()
 			local orig_stderr = io.stderr

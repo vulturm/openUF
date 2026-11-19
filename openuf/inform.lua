@@ -4265,6 +4265,45 @@ function M._push_options_fp(cfg)
 	return table.concat(parts, ";")
 end
 
+-- The last configuration push, verbatim, in RAM (a reboot empties it): a
+-- local option that only acts inside apply_config is applied by running that
+-- push again, here, instead of waiting for the controller. Forgetting
+-- cfgversion asks the controller for one, but it answered `noop` for minutes
+-- on end (2026-11-19, a hAP ac, after a few pushes that hour). It holds the
+-- WLAN keys, as state.json holds the authkey: owner-only from the empty file
+-- on, before the body is written.
+M.LAST_PUSH_FILE = "/tmp/openuf-last-push.json"
+M._chmod600 = function(path) return os.execute("chmod 600 '" .. path:gsub("'", "'\\''") .. "'") end
+
+function M._save_last_push(json_str)
+	local tmp = M.LAST_PUSH_FILE .. ".tmp"
+	local f = io.open(tmp, "w")
+	if not f then return false end
+	M._chmod600(tmp)
+	f:write(json_str)
+	f:close()
+	return os.rename(tmp, M.LAST_PUSH_FILE) and true or false
+end
+
+-- Apply the saved push again, as if the controller had just sent it. Returns
+-- true when there was one and it ran.
+function M._replay_last_push(st, cfg)
+	local f = io.open(M.LAST_PUSH_FILE, "r")
+	if not f then return false end
+	local s = f:read("*a")
+	f:close()
+	if not s or s == "" then return false end
+	io.stderr:write("openuf: a local option that applies with the configuration changed -- "
+		.. "applying the last push again\n")
+	M._replaying = true
+	local ok, err = pcall(M.handle_response, s, st, cfg)
+	M._replaying = false
+	if not ok then
+		io.stderr:write("openuf: applying the last push again failed: " .. tostring(err) .. "\n")
+	end
+	return ok
+end
+
 -- Forget cfgversion when those options differ from the ones the last push
 -- was applied with, as _reconcile_plugins does for the plugin set, so the
 -- controller pushes again and the change takes effect within a heartbeat.
@@ -4714,6 +4753,10 @@ function M.handle_response(json_str, st, cfg)
 	pcall(M._note_server_time, resp)
 
 	local _type = resp._type
+	-- The last push that carried a configuration, for _replay_last_push.
+	if _type == "setparam" and type(resp.system_cfg) == "string" and not M._replaying then
+		pcall(M._save_last_push, json_str)
+	end
 
 	-- New response shapes are the ledger's whole reason to exist: an unknown
 	-- _type is recorded with its full body, and a known one has any field no
@@ -8518,6 +8561,10 @@ function M._tick(st, cfg, ufhw, ctx)
 		ufuci.begin_pass()
 	end
 	ctx.last_mtime = M._reload_if_changed(st, cfg, ctx.last_mtime)
+	if M._replay_due then
+		M._replay_due = false
+		pcall(M._replay_last_push, st, cfg)
+	end
 	-- The STUN client: a Binding Request every stun.INTERVAL, before the
 	-- inform so the reply's mapped address rides out on it.
 	pcall(M._stun_tick, st)
@@ -8733,7 +8780,9 @@ function M.run(cfg, ufhw)
 	end
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	M._reconcile_plugins(st, cfg)
-	M._reconcile_local_options(st, cfg)
+	-- Replayed on the first tick, once the net info is in: until a reboot
+	-- the saved push is there, and cfgversion forgotten covers the rest.
+	if M._reconcile_local_options(st, cfg) then M._replay_due = true end
 	M._migrate_legacy_rrb(st, cfg)
 	-- Blocked-client nft rules are live kernel state, not persisted UCI --
 	-- reapply from state.json on every fresh start (mirrors the bootstrap
