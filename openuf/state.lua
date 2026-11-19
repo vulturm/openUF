@@ -73,8 +73,10 @@ local TYPED = {
 	-- plugins.fingerprint() of the plugins the last push was built with
 	-- (inform._reconcile_plugins forgets cfgversion when it moves).
 	plugins_fp                = "string",
-	-- controller_steering as last applied ("on"/"off"): a change forgets
-	-- cfgversion (inform._reconcile_local_steering).
+	-- inform._push_options_fp() of the local options the last push was
+	-- applied with: a change forgets cfgversion (_reconcile_local_options).
+	push_options              = "string",
+	-- Its predecessor, controller_steering's alone: read once, then dropped.
 	steering_local            = "string",
 	inform_url                = "string",
 	use_gcm                   = "boolean",
