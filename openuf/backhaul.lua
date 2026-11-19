@@ -346,16 +346,15 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		end
 	end
 
-	-- A CAC job in progress (dfs_cac_recover) owns the station until it ends;
-	-- run first, also right after a restart or reboot, and also to undo itself
-	-- if the uplink went wired meanwhile.
-	local ok_c, cac_open = pcall(M.cac_step, st, ufuci)
+	-- A CAC job in progress (dfs_cac_recover) is judged first, also right after
+	-- a restart, and closed if the uplink went wired meanwhile.
+	local ok_c, cac_open = pcall(M.cac_step, st)
 	if ok_c and cac_open then
-		-- the station is off on purpose: nothing to follow, nothing to judge
+		-- hostapd is running the CAC: nothing to judge until it ends
 	elseif new_mode == "wireless" and mode == "wireless" then
 		pcall(M.follow_parent_channel, st, ufuci, sta_if, secs[1].radio)
 		local ok_s, stall = pcall(M.check_ap_stall, sta_if, secs[1].radio)
-		if ok_s and stall then pcall(M.cac_start, st, cfg, ufuci, sta_if, stall) end
+		if ok_s and stall then pcall(M.cac_start, st, cfg, ufuci, stall) end
 	elseif M.ap_stall or M._stall_ticks > 0 then
 		M._stall_ticks, M.ap_stall = 0, nil   -- on the wire: the station is down by design
 	end
@@ -440,7 +439,9 @@ M.ap_stall = nil       -- {radio, channel, reason = "dfs"|"unknown", dfs_state}
 function M.phy_aps(iwdev, phy)
 	local aps, cur_phy, cur = {}, nil, nil
 	local function flush()
-		if cur and cur.ap then aps[#aps + 1] = {ifname = cur.name, beaconing = cur.ssid} end
+		if cur and cur.ap then
+			aps[#aps + 1] = {ifname = cur.name, beaconing = cur.ssid, tuned = cur.chan}
+		end
 		cur = nil
 	end
 	for line in (iwdev or ""):gmatch("[^\n]+") do
@@ -456,6 +457,7 @@ function M.phy_aps(iwdev, phy)
 			elseif cur then
 				if line:match("^%s+type AP%s*$") then cur.ap = true end
 				if line:match("^%s+ssid ") then cur.ssid = true end
+				if line:match("^%s+channel %d") then cur.chan = true end
 			end
 		end
 	end
@@ -491,10 +493,12 @@ function M.check_ap_stall(sta_if, radio)
 	for _, a in ipairs(aps) do
 		if a.beaconing then silent = false end
 	end
-	if silent then
-		-- A CAC hostapd is running is what a DFS start should look like.
-		local st = M._popen("ubus call hostapd." .. aps[1].ifname .. " get_status 2>/dev/null") or ""
-		if st:match('"status":%s*"DFS"') then silent = false end
+	-- A CAC in progress is what a DFS start should look like: the AP holds a
+	-- channel (iw prints `channel`) but has no `ssid` yet. Not hostapd's ubus
+	-- status: its hostapd.<if> object is gone for the whole CAC (seen on the
+	-- hAP ac), and the stalled AP holds no channel at all.
+	for _, a in ipairs(aps) do
+		if a.tuned and not a.beaconing then silent = false end
 	end
 	if not silent then
 		if M.ap_stall then
@@ -510,11 +514,12 @@ function M.check_ap_stall(sta_if, radio)
 	local dfs = M.channel_dfs(M._popen("iw phy " .. phy .. " channels"), freq)
 	local is_dfs = dfs and dfs.radar and dfs.state ~= "available"
 	M.ap_stall = {radio = radio, channel = chan, reason = is_dfs and "dfs" or "unknown",
-		dfs_state = dfs and dfs.state or nil}
+		dfs_state = dfs and dfs.state or nil, phy = phy, ifname = aps[1].ifname}
 	if is_dfs then
 		M._log(("%s: no SSID is on the air -- the parent is on DFS channel %d (DFS state %s, no CAC "
-			.. "done) and this radio cannot clear it while the station holds it. Move the parent to "
-			.. "a non-DFS channel, or serve clients from another radio")
+			.. "done) and hostapd's start on the station's channel only set the beacon, which the "
+			.. "kernel refuses. dfs_cac_recover = true restarts hostapd so it runs the CAC; or move "
+			.. "the parent to a non-DFS channel, or serve clients from another radio")
 			:format(tostring(radio), chan, tostring(dfs.state)))
 	else
 		M._log(("%s: no SSID is on the air on channel %s although the uplink is up -- "
@@ -527,30 +532,30 @@ end
 -- ─── Clearing the parent's DFS channel (opt-in: dfs_cac_recover) ────────────
 --
 -- check_ap_stall only reports. With conf.lua `dfs_cac_recover = true` a DFS
--- stall is also cleared: the uplink station is switched off (UCI + `wifi
--- reload`, the same switch the wired-first policy uses), the radio comes up
--- with its APs alone on the channel follow_parent_channel pinned, hostapd's
--- ordinary start runs the CAC (its apsta start does not: it only sets the
--- beacon, which is how the stall arises), and once an AP beacons the station
--- goes back on and rejoins on the now-available channel.
+-- stall is also cleared, without touching the uplink: hostapd's interface is
+-- disabled and enabled again (`hostapd_cli disable` / `enable`), which is its
+-- ORDINARY start -- COUNTRY_UPDATE -> DFS -> CAC -> AP-ENABLED -- where the
+-- apsta start that the station's connect triggers only sets the beacon (the
+-- stall itself). Measured on the hAP ac (ath10k) as a mesh child on a DFS
+-- channel: the CAC runs with the station connected and the mesh up
+-- throughout, 60 s, then the APs beacon. An apsta stop + start does NOT do it
+-- (tried the same day: the channel drops back to usable at once and the start
+-- fails the beacon again); taking the station down first worked too, but the
+-- `wifi reload` that brought it back threw the cleared state away again.
 --
--- The price is the uplink: down for the CAC (60 s under FCC, 10 MINUTES on
--- ETSI's weather-radar channels 120-128) every time the parent lands on an
--- uncleared DFS channel. Hence opt-in, and bounded:
---   • CAC_MAX: the station comes back after this however the CAC went;
---   • a failsafe shell outside the daemon restores it too, should the daemon
---     die with the station off (the marker file says the job is still open);
---   • st.backhaul_cac is persisted, so a restarted daemon or a reboot finishes
---     the job on its first tick;
+-- The APs are not on the air during the CAC -- they were not before it either
+-- -- so the cost is only hostapd's restart. Opt-in all the same while it has
+-- run on one board, and bounded:
+--   • CAC_MAX: a job that sees no beacon by then is a failure (ETSI's weather
+--     channels 120-128 take 600 s);
 --   • RETRY_BASE between attempts, doubled for every attempt that did not
---     hold (no beacon, or the stall back within HOLD of the rejoin), up to
---     RETRY_MAX -- on ETSI the cleared state can lapse during the second
---     reload, and a loop of ten-minute outages is worse than the stall.
+--     hold (no beacon, or the stall back within HOLD), up to RETRY_MAX;
+--   • st.backhaul_cac is persisted so a restarted daemon judges the job it
+--     started instead of starting another.
 M.CAC_MAX    = 720
 M.RETRY_BASE = 1800
 M.RETRY_MAX  = 6 * 3600
 M.HOLD       = 600
-M.CAC_MARKER = "/var/run/openuf.cac"
 M._now = os.time
 
 local function cac_enabled(cfg)
@@ -562,100 +567,74 @@ function M.cac_backoff(fails)
 	return math.min(M.RETRY_BASE * (2 ^ n), M.RETRY_MAX)
 end
 
--- Put the station back, whatever the CAC did. Only while the uplink is meant
--- to be wireless: on the wire the station stays off by the policy's choice.
-function M.cac_restore(st, ufuci, ok, why)
-	local job = st and st.backhaul_cac
-	if type(job) ~= "table" then return false end
+local function cac_finish(st, ok, why)
+	local job = st.backhaul_cac
 	st.backhaul_cac = nil
 	M._dirty = true
-	M._exec("rm -f " .. M.CAC_MARKER)
 	if ok then
 		st.backhaul_cac_rejoined = M._now()
+		M.ap_stall = nil
 	else
 		st.backhaul_cac_fails = (tonumber(st.backhaul_cac_fails) or 0) + 1
 	end
-	M._log(("%s: %s -- uplink station back on%s"):format(tostring(job.radio), why,
-		ok and "" or (", next attempt in " .. math.floor(M.cac_backoff(st.backhaul_cac_fails) / 60) .. " min")))
-	if st.backhaul_mode == "wireless" and ufuci and ufuci.backhaul_set_uplink_enabled then
-		local okc, err = pcall(ufuci.backhaul_set_uplink_enabled, true)
-		if not okc then M._log("could not switch the station back on: " .. tostring(err)) end
-	end
-	M.ap_stall = nil
-	return true
+	M._log(("%s: %s%s"):format(tostring(job and job.radio), why,
+		ok and "" or (" -- next attempt in " .. math.floor(M.cac_backoff(st.backhaul_cac_fails) / 60) .. " min")))
 end
 
--- One step of the job while it is open: done when an AP of the phy beacons,
--- given up after CAC_MAX. Returns true while the station is (meant to be) off.
-function M.cac_step(st, ufuci)
+-- One step of an open job: done when an AP of the phy beacons, failed after
+-- CAC_MAX. Returns true while the job is still open.
+function M.cac_step(st)
 	local job = st and st.backhaul_cac
 	if type(job) ~= "table" then return false end
 	local elapsed = M._now() - (tonumber(job.since) or 0)
 	if st.backhaul_mode ~= "wireless" then
-		M.cac_restore(st, ufuci, false, "the uplink went wired during the CAC")
+		cac_finish(st, false, "the uplink went wired during the CAC")
 		return false
 	end
 	for _, a in ipairs(M.phy_aps(M._popen("iw dev"), job.phy)) do
 		if a.beaconing then
-			M.cac_restore(st, ufuci, true, ("channel %s cleared in %d s, the APs are on the air")
+			cac_finish(st, true, ("channel %s cleared in %d s, the APs are on the air")
 				:format(tostring(job.channel), elapsed))
 			return false
 		end
 	end
 	if elapsed < 0 or elapsed > M.CAC_MAX then
-		M.cac_restore(st, ufuci, false, ("no AP on the air after %d s"):format(elapsed))
+		cac_finish(st, false, ("no AP on the air %d s after the restart"):format(elapsed))
 		return false
 	end
 	M.ap_stall = {radio = job.radio, channel = job.channel, reason = "cac"}
 	return true
 end
 
--- Start a job for a DFS stall when the operator asked for it and the backoff
--- allows. Returns true when the station was switched off.
-function M.cac_start(st, cfg, ufuci, sta_if, stall)
+-- Start a job for a proven DFS stall when the operator asked for it and the
+-- backoff allows. Returns true when hostapd was restarted.
+function M.cac_start(st, cfg, ufuci, stall)
 	if not (cac_enabled(cfg) and type(stall) == "table" and stall.reason == "dfs") then return false end
-	if not (ufuci and ufuci.backhaul_set_uplink_enabled and valid_ifname(sta_if)) then return false end
+	if not (valid_ifname(stall.ifname) and type(stall.phy) == "string") then return false end
 	local now = M._now()
-	-- The previous rejoin did not hold: the stall is back within HOLD.
+	-- The previous clearing did not hold: the stall is back within HOLD.
 	local rejoined = tonumber(st.backhaul_cac_rejoined)
 	if rejoined and now - rejoined < M.HOLD then
 		st.backhaul_cac_fails = (tonumber(st.backhaul_cac_fails) or 0) + 1
-		M._log(("%s: the cleared channel did not hold after the station rejoined"):format(tostring(stall.radio)))
+		M._log(("%s: the cleared channel did not hold"):format(tostring(stall.radio)))
 	end
 	st.backhaul_cac_rejoined = nil
 	local last = tonumber(st.backhaul_cac_last)
 	if last and now - last < M.cac_backoff(st.backhaul_cac_fails) then return false end
 	-- The CAC runs on the channel UCI names: only once follow_parent_channel
-	-- has pinned it to the parent's, or a CAC would clear the wrong one.
-	if ufuci.radio_channel and tostring(ufuci.radio_channel(stall.radio)) ~= tostring(stall.channel) then
+	-- has pinned it to the parent's, or it would clear the wrong one.
+	if ufuci and ufuci.radio_channel and tostring(ufuci.radio_channel(stall.radio)) ~= tostring(stall.channel) then
 		return false
 	end
-	local phy = (M._read_file("/sys/class/net/" .. sta_if .. "/phy80211/name") or ""):match("^(phy%d+)")
-	if not phy then return false end
-	-- The failsafe first: if anything below dies half-way, the station still
-	-- comes back. It acts only while the marker (tmpfs) is there.
-	local secs = ufuci.backhaul_uplink_sections and ufuci.backhaul_uplink_sections() or {}
-	local names = {}
-	for _, s in ipairs(secs) do
-		if type(s.name) == "string" and s.name:match("^[%w_]+$") then names[#names + 1] = s.name end
-	end
-	if #names == 0 then return false end
-	local sets = {}
-	for _, n in ipairs(names) do sets[#sets + 1] = "uci set wireless." .. n .. ".disabled=0" end
-	M._exec("echo " .. now .. " > " .. M.CAC_MARKER)
-	M._exec(("(sleep %d; [ -f %s ] && { %s; uci commit wireless; rm -f %s; wifi reload; "
-		.. "logger -t openuf 'backhaul: CAC failsafe put the uplink station back on'; }) "
-		.. ">/dev/null 2>&1 &"):format(M.CAC_MAX + 120, M.CAC_MARKER, table.concat(sets, "; "), M.CAC_MARKER))
-	st.backhaul_cac = {since = now, radio = stall.radio, channel = stall.channel, phy = phy}
+	st.backhaul_cac = {since = now, radio = stall.radio, channel = stall.channel, phy = stall.phy}
 	st.backhaul_cac_last = now
 	M._dirty = true
-	M._log(("%s: clearing DFS channel %s -- the uplink station is off while hostapd runs the CAC "
-		.. "(up to %d s; dfs_cac_recover)"):format(tostring(stall.radio), tostring(stall.channel), M.CAC_MAX))
-	local okc, err = pcall(ufuci.backhaul_set_uplink_enabled, false)
-	if not okc then
-		M.cac_restore(st, ufuci, false, "could not switch the station off: " .. tostring(err))
-		return false
-	end
+	M._log(("%s: restarting hostapd on %s so it runs the CAC for DFS channel %s (the uplink stays up; "
+		.. "dfs_cac_recover)"):format(tostring(stall.radio), stall.ifname, tostring(stall.channel)))
+	-- hostapd_cli's own answers are unreliable here (DISABLE "timed out" while
+	-- the interface did go down): the next heartbeats judge by the air.
+	M._exec(("hostapd_cli -i %s disable >/dev/null 2>&1; sleep 1; hostapd_cli -i %s enable >/dev/null 2>&1")
+		:format(stall.ifname, stall.ifname))
 	M.ap_stall = {radio = stall.radio, channel = stall.channel, reason = "cac"}
 	return true
 end

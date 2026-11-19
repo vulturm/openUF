@@ -519,14 +519,16 @@ return {
 		name = "backhaul: check_ap_stall() names the DFS cause once, after STALL_TICKS, and clears when the APs beacon",
 		fn = function()
 			local o_popen, o_read, o_log = backhaul._popen, backhaul._read_file, backhaul._log
-			local logs, beacon, hostapd = {}, false, '{ "status": "ENABLED" }'
+			-- ap: "stalled" (no channel, no ssid), "cac" (channel, no ssid), "up" (both)
+			local logs, ap = {}, "stalled"
 			local link = "Connected to 00:00:5e:00:53:80 (on phy0-sta0)\n\tfreq: 5620.0\n"
 			backhaul._popen = function(cmd)
 				if cmd == "iw dev phy0-sta0 link" then return link end
 				if cmd == "iw dev" then
-					return "phy#0\n\tInterface phy0-ap0\n" .. (beacon and "\t\tssid eG\n" or "") .. "\t\ttype AP\n"
+					return "phy#0\n\tInterface phy0-ap0\n"
+						.. (ap == "up" and "\t\tssid eG\n" or "") .. "\t\ttype AP\n"
+						.. (ap ~= "stalled" and "\t\tchannel 124 (5620 MHz), width: 80 MHz\n" or "")
 				end
-				if cmd:match("^ubus call hostapd%.phy0%-ap0 get_status") then return hostapd end
 				if cmd == "iw phy phy0 channels" then
 					return "\t* 5620 MHz [124] \n\t  Radar detection\n\t  DFS state: usable (for 3 sec)\n"
 				end
@@ -547,18 +549,21 @@ return {
 			assert_eq(r3 and r3.reason, "dfs", "the third names DFS")
 			assert_eq(r3.channel, 124, "on the parent's channel")
 			assert_eq(r3.dfs_state, "usable", "and why")
+			assert_eq(r3.phy, "phy0", "with the phy")
+			assert_eq(r3.ifname, "phy0-ap0", "and the AP hostapd answers on")
 			assert_eq(r4, r3, "still stalled")
 			assert_eq(#logs, 1, "said once, not every heartbeat")
 			assert_true(logs[1]:find("DFS channel 124", 1, true) ~= nil, "the log names the cause")
-			beacon = true
+			ap = "up"
 			assert_nil(backhaul.check_ap_stall("phy0-sta0", "radio0"), "beaconing again")
 			assert_nil(backhaul.ap_stall, "cleared")
 			assert_true(logs[2]:find("on the air again", 1, true) ~= nil, "and said so")
-			-- A CAC hostapd is running is not a stall.
-			beacon, hostapd = false, '{ "status": "DFS" }'
+			-- A CAC in progress holds a channel but has no ssid yet (hostapd's ubus
+			-- object is gone meanwhile -- the false stall the first build raised).
+			ap = "cac"
 			for _ = 1, 5 do assert_nil(backhaul.check_ap_stall("phy0-sta0", "radio0"), "CAC running") end
 			-- No link: nothing to judge.
-			hostapd, link = '{ "status": "ENABLED" }', "Not connected.\n"
+			ap, link = "stalled", "Not connected.\n"
 			for _ = 1, 5 do assert_nil(backhaul.check_ap_stall("phy0-sta0", "radio0"), "station down") end
 			backhaul._popen, backhaul._read_file, backhaul._log = o_popen, o_read, o_log
 			backhaul._stall_ticks, backhaul.ap_stall = 0, nil
@@ -572,7 +577,6 @@ return {
 			backhaul._popen = function(cmd)
 				if cmd == "iw dev phy0-sta0 link" then return "Connected to 00:00:5e:00:53:80\n\tfreq: 5745.0\n" end
 				if cmd == "iw dev" then return "phy#0\n\tInterface phy0-ap0\n\t\ttype AP\n" end
-				if cmd:match("^ubus call hostapd") then return '{ "status": "ENABLED" }' end
 				if cmd == "iw phy phy0 channels" then return "\t* 5745 MHz [149] \n\t  Maximum TX power: 30.0 dBm\n" end
 				error("unexpected command " .. cmd)
 			end
@@ -588,30 +592,30 @@ return {
 		end
 	},
 	{
-		name = "backhaul: dfs_cac_recover off (the default) never touches the station on a DFS stall",
+		name = "backhaul: dfs_cac_recover off (the default) never restarts hostapd on a DFS stall",
 		fn = function()
-			local o_log = backhaul._log
+			local o_exec, o_log = backhaul._exec, backhaul._log
+			local execs = {}
+			backhaul._exec = function(c) execs[#execs + 1] = c; return 0 end
 			backhaul._log = function() end
-			local uf = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = false}}, "phy0-sta0")
 			local st = {backhaul_mode = "wireless"}
-			local stall = {radio = "radio0", channel = 124, reason = "dfs"}
-			assert_false(backhaul.cac_start(st, nil, uf, "phy0-sta0", stall), "no config: off")
-			assert_false(backhaul.cac_start(st, {config = {}}, uf, "phy0-sta0", stall), "absent: off")
-			assert_false(backhaul.cac_start(st, {config = {dfs_cac_recover = false}}, uf, "phy0-sta0", stall), "false: off")
-			backhaul._log = o_log
-			assert_eq(#uf.calls, 0, "the station was never switched")
+			local stall = {radio = "radio0", channel = 124, reason = "dfs", phy = "phy0", ifname = "phy0-ap0"}
+			assert_false(backhaul.cac_start(st, nil, nil, stall), "no config: off")
+			assert_false(backhaul.cac_start(st, {config = {}}, nil, stall), "absent: off")
+			assert_false(backhaul.cac_start(st, {config = {dfs_cac_recover = false}}, nil, stall), "false: off")
+			backhaul._exec, backhaul._log = o_exec, o_log
+			assert_eq(#execs, 0, "hostapd was never touched")
 			assert_nil(st.backhaul_cac, "no job")
 		end
 	},
 	{
-		name = "backhaul: dfs_cac_recover clears a DFS stall -- station off with a failsafe, back on once an AP beacons",
+		name = "backhaul: dfs_cac_recover restarts hostapd in place (the uplink untouched) and closes the job once an AP beacons",
 		fn = function()
-			local o = {backhaul._popen, backhaul._read_file, backhaul._log, backhaul._exec, backhaul._now}
+			local o = {backhaul._popen, backhaul._log, backhaul._exec, backhaul._now}
 			local now, beacon, execs, logs = 1000, false, {}, {}
 			backhaul._now = function() return now end
 			backhaul._exec = function(cmd) execs[#execs + 1] = cmd; return 0 end
 			backhaul._log = function(m) logs[#logs + 1] = m end
-			backhaul._read_file = function() return "phy0\n" end
 			backhaul._popen = function(cmd)
 				if cmd == "iw dev" then
 					return "phy#0\n\tInterface phy0-ap0\n" .. (beacon and "\t\tssid eG\n" or "") .. "\t\ttype AP\n"
@@ -622,76 +626,68 @@ return {
 			uf.radio_channel = function() return "124" end
 			local st = {backhaul_mode = "wireless"}
 			local cfg = {config = {dfs_cac_recover = true}}
-			local stall = {radio = "radio0", channel = 124, reason = "dfs"}
-			assert_false(backhaul.cac_start(st, cfg, uf, "phy0-sta0", {radio = "radio0", channel = 124, reason = "unknown"}),
-				"an unproven cause is never acted on")
-			assert_true(backhaul.cac_start(st, cfg, uf, "phy0-sta0", stall), "started")
-			assert_eq(uf.calls[1], false, "the station went off")
+			local stall = {radio = "radio0", channel = 124, reason = "dfs", phy = "phy0", ifname = "phy0-ap0"}
+			local unknown = {radio = "radio0", channel = 124, reason = "unknown", phy = "phy0", ifname = "phy0-ap0"}
+			assert_false(backhaul.cac_start(st, cfg, uf, unknown), "an unproven cause is never acted on")
+			assert_false(backhaul.cac_start(st, cfg, uf, {radio = "radio0", channel = 124, reason = "dfs",
+				phy = "phy0", ifname = "x; reboot"}), "an interface name cannot reach the shell")
+			assert_true(backhaul.cac_start(st, cfg, uf, stall), "started")
+			assert_eq(#execs, 1, "one command")
+			assert_eq(execs[1], "hostapd_cli -i phy0-ap0 disable >/dev/null 2>&1; sleep 1; "
+				.. "hostapd_cli -i phy0-ap0 enable >/dev/null 2>&1", "disable + enable: hostapd's ordinary start")
+			assert_eq(#uf.calls, 0, "the uplink station was not touched")
 			assert_eq(st.backhaul_cac.phy, "phy0", "the job remembers the phy")
-			assert_eq(st.backhaul_cac.channel, 124, "and the channel")
 			assert_eq(backhaul.ap_stall.reason, "cac", "status says a CAC is running")
-			local failsafe
-			for _, c in ipairs(execs) do if c:find("sleep", 1, true) then failsafe = c end end
-			assert_true(failsafe ~= nil, "a failsafe was spawned")
-			assert_true(failsafe:find("[ -f /var/run/openuf.cac ]", 1, true) ~= nil, "it acts only while the job is open")
-			assert_true(failsafe:find("uci set wireless.openuf_bh_ul_radio0.disabled=0", 1, true) ~= nil, "it restores the station")
-			assert_true(failsafe:find("&$") ~= nil, "in the background")
 			now = 1030
-			assert_true(backhaul.cac_step(st, uf), "CAC still running")
-			assert_eq(#uf.calls, 1, "the station stays off")
-			now, beacon = 1065, true
-			assert_false(backhaul.cac_step(st, uf), "done")
-			assert_eq(uf.calls[2], true, "the station is back on")
+			assert_true(backhaul.cac_step(st), "CAC still running")
+			now, beacon = 1062, true
+			assert_false(backhaul.cac_step(st), "done")
 			assert_nil(st.backhaul_cac, "job closed")
-			assert_eq(st.backhaul_cac_rejoined, 1065, "the rejoin is dated, to judge whether it holds")
-			assert_true(execs[#execs]:find("rm -f /var/run/openuf.cac", 1, true) ~= nil, "the failsafe is disarmed")
-			assert_true(logs[#logs]:find("cleared in 65 s", 1, true) ~= nil, "and said how long it took")
+			assert_eq(st.backhaul_cac_rejoined, 1062, "dated, to judge whether it holds")
+			assert_true(logs[#logs]:find("cleared in 62 s", 1, true) ~= nil, "and said how long it took")
 			assert_nil(backhaul.ap_stall, "no stall reported any more")
-			backhaul._popen, backhaul._read_file, backhaul._log, backhaul._exec, backhaul._now = o[1], o[2], o[3], o[4], o[5]
+			assert_eq(#uf.calls, 0, "still nothing done to the station")
+			backhaul._popen, backhaul._log, backhaul._exec, backhaul._now = o[1], o[2], o[3], o[4]
 		end
 	},
 	{
-		name = "backhaul: a CAC job gives the station back after CAC_MAX, and backs off when the clearing does not hold",
+		name = "backhaul: a CAC job fails after CAC_MAX and backs off when the clearing does not hold",
 		fn = function()
-			local o = {backhaul._popen, backhaul._read_file, backhaul._log, backhaul._exec, backhaul._now}
+			local o = {backhaul._popen, backhaul._log, backhaul._exec, backhaul._now}
 			local now = 5000
 			backhaul._now = function() return now end
 			backhaul._exec = function() return 0 end
 			backhaul._log = function() end
-			backhaul._read_file = function() return "phy0" end
 			backhaul._popen = function() return "phy#0\n\tInterface phy0-ap0\n\t\ttype AP\n" end
-			local uf = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = false}}, "phy0-sta0")
-			uf.radio_channel = function() return "124" end
+			local uf = {radio_channel = function() return "124" end}
 			local st = {backhaul_mode = "wireless"}
 			local cfg = {config = {dfs_cac_recover = true}}
-			local stall = {radio = "radio0", channel = 124, reason = "dfs"}
-			assert_true(backhaul.cac_start(st, cfg, uf, "phy0-sta0", stall), "started")
+			local stall = {radio = "radio0", channel = 124, reason = "dfs", phy = "phy0", ifname = "phy0-ap0"}
+			assert_true(backhaul.cac_start(st, cfg, uf, stall), "started")
 			now = 5000 + backhaul.CAC_MAX + 1
-			assert_false(backhaul.cac_step(st, uf), "given up")
-			assert_eq(uf.calls[#uf.calls], true, "the station is back on regardless")
+			assert_false(backhaul.cac_step(st), "given up")
 			assert_eq(st.backhaul_cac_fails, 1, "a failure counted")
-			now = now + backhaul.RETRY_BASE
-			assert_false(backhaul.cac_start(st, cfg, uf, "phy0-sta0", stall), "one failure doubles the wait")
+			now = 5000 + backhaul.RETRY_BASE + 1
+			assert_false(backhaul.cac_start(st, cfg, uf, stall), "one failure doubles the wait")
 			now = 5000 + backhaul.cac_backoff(1) + 1
-			assert_true(backhaul.cac_start(st, cfg, uf, "phy0-sta0", stall), "retried after the backoff")
-			-- This time it clears, but the stall is back within HOLD.
+			assert_true(backhaul.cac_start(st, cfg, uf, stall), "retried after the backoff")
 			backhaul._popen = function() return "phy#0\n\tInterface phy0-ap0\n\t\tssid eG\n\t\ttype AP\n" end
 			now = now + 70
-			assert_false(backhaul.cac_step(st, uf), "cleared")
+			assert_false(backhaul.cac_step(st), "cleared")
 			assert_eq(st.backhaul_cac_fails, 1, "a clearing is not yet a failure")
 			now = now + 60
-			assert_false(backhaul.cac_start(st, cfg, uf, "phy0-sta0", stall), "the stall came back within HOLD: wait")
+			assert_false(backhaul.cac_start(st, cfg, uf, stall), "the stall came back within HOLD: wait")
 			assert_eq(st.backhaul_cac_fails, 2, "and that counts as a failure")
 			assert_eq(backhaul.cac_backoff(20), backhaul.RETRY_MAX, "the wait is capped")
 			uf.radio_channel = function() return "100" end
 			now = now + backhaul.RETRY_MAX
-			assert_false(backhaul.cac_start(st, cfg, uf, "phy0-sta0", stall),
+			assert_false(backhaul.cac_start(st, cfg, uf, stall),
 				"UCI not on the parent's channel yet: a CAC would clear the wrong one")
-			backhaul._popen, backhaul._read_file, backhaul._log, backhaul._exec, backhaul._now = o[1], o[2], o[3], o[4], o[5]
+			backhaul._popen, backhaul._log, backhaul._exec, backhaul._now = o[1], o[2], o[3], o[4]
 		end
 	},
 	{
-		name = "backhaul: an open CAC job is finished by tick() after a restart, and left off when the uplink went wired",
+		name = "backhaul: an open CAC job is judged by tick() after a restart, and closed when the uplink went wired",
 		fn = function()
 			local o = {backhaul._popen, backhaul._log, backhaul._exec, backhaul._now}
 			backhaul._now = function() return 100 end
@@ -701,19 +697,17 @@ return {
 				if cmd == "iw dev" then return "phy#0\n\tInterface phy0-ap0\n\t\tssid eG\n\t\ttype AP\n" end
 				return ""
 			end
-			local uf = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = true}}, "phy0-sta0")
-			-- A daemon restarted mid-job: state.json still holds it.
+			local uf = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = false}}, "phy0-sta0")
 			local st = {backhaul_mode = "wireless",
 				backhaul_cac = {since = 40, radio = "radio0", channel = 124, phy = "phy0"}}
 			backhaul.tick(st, {}, uf, {}, nil)
-			assert_nil(st.backhaul_cac, "the job was finished on the first tick")
-			assert_eq(uf.calls[1], true, "the station is back on")
-			local uf2 = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = true}}, "phy0-sta0")
+			assert_nil(st.backhaul_cac, "the job a previous daemon started was closed on the first tick")
+			assert_eq(st.backhaul_cac_rejoined, 100, "as a success")
 			local st2 = {backhaul_mode = "wired",
 				backhaul_cac = {since = 40, radio = "radio0", channel = 124, phy = "phy0"}}
-			assert_false(backhaul.cac_step(st2, uf2), "closed")
-			assert_eq(#uf2.calls, 0, "on the wire the station stays off")
-			assert_nil(st2.backhaul_cac, "and the job is gone")
+			assert_false(backhaul.cac_step(st2), "closed")
+			assert_nil(st2.backhaul_cac, "the job is gone")
+			assert_eq(#uf.calls, 0, "no station switched by either")
 			backhaul._popen, backhaul._log, backhaul._exec, backhaul._now = o[1], o[2], o[3], o[4]
 		end
 	},

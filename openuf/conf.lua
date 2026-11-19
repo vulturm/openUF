@@ -219,13 +219,13 @@ config = {
 
 	-- A wireless (mesh) child whose parent moves to a DFS channel this radio
 	-- has not cleared ends up with no SSID on that band: the APs need a radar
-	-- check (CAC) there, and it cannot run while the uplink station holds the
-	-- radio. openUF always says so (log, /tmp/openuf-status `ap_stall=`).
-	-- true also clears it: the uplink station goes off, the APs run the CAC,
-	-- the station comes back. The AP is OFFLINE meanwhile -- about a minute,
-	-- or ten on the EU weather-radar channels 120-128 -- each time the parent
-	-- lands on such a channel; retried at most every 30 min, backing off to
-	-- 6 h when it does not hold. Off by default for that reason.
+	-- check (CAC) there, and hostapd's start on the uplink's channel skips it.
+	-- openUF always says so (log, /tmp/openuf-status `ap_stall=`). true also
+	-- clears it: hostapd is restarted so it runs the CAC, with the uplink up
+	-- throughout; the APs come on the air a minute later (ten on the EU
+	-- weather-radar channels 120-128). Retried at most every 30 min, backing
+	-- off to 6 h when it does not hold. Off by default until it has run on
+	-- more than one board.
 	dfs_cac_recover = false,
 
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->
