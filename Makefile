@@ -12,6 +12,9 @@
 #   make simulate   adoption round-trip against tools/test_controller.py
 #   make ci         all of the above, in CI's order
 #   make rrb-compat tools/rrb-unifi-compat.sh (ARGS=--bump to move the pin)
+#   make deps-update   move the rrb-unifi pin to the latest release that passes both suites
+#   make deps-check HOST="ip ..."   on the APs: upgradable dependency packages, rrb-unifi vs pin
+#   make deps-deploy HOST="ip ..."  upgrade them and install the pinned rrb-unifi (tools/deps.sh)
 #   make release-archive VERSION=x.y.z
 #   make shell      an interactive shell in the image
 #   make image      (re)build the image; every other target does this when it is missing
@@ -56,7 +59,7 @@ SH_SCRIPTS := setup.sh install.sh update.sh \
 	$(wildcard package/luci-app-openuf/root/etc/uci-defaults/*) \
 	$(wildcard package/luci-theme-halo/root/etc/uci-defaults/*)
 
-.PHONY: test verify dist sh-check simulate ci rrb-compat release-archive shell image ensure-image
+.PHONY: test verify dist sh-check simulate ci rrb-compat deps-update deps-check deps-deploy release-archive shell image ensure-image
 
 test: $(ENSURE)
 	$(RUN) 'OPENUF_REQUIRE_GCM=1 lua tests/run_tests.lua'
@@ -80,6 +83,20 @@ ci: sh-check test simulate verify
 # Needs the network: fetches d-malinowski's latest rrb-unifi release.
 rrb-compat: $(ENSURE)
 	$(RUN) 'sh tools/rrb-unifi-compat.sh $(ARGS)'
+
+# The latest rrb-unifi that is known to work: the compat check, and the pin moved
+# (setup.sh, the test fixture) only when it passes. Review and commit the result.
+deps-update: $(ENSURE)
+	$(RUN) 'sh tools/rrb-unifi-compat.sh --bump'
+
+# On the host, not in the image: ssh needs this machine's keys (deploy.sh does the same).
+deps-check:
+	@test -n "$(HOST)" || { echo 'HOST="<ap-ip> [ap-ip...]" is required'; exit 1; }
+	sh tools/deps.sh --check $(HOST)
+
+deps-deploy:
+	@test -n "$(HOST)" || { echo 'HOST="<ap-ip> [ap-ip...]" is required'; exit 1; }
+	sh tools/deps.sh $(HOST)
 
 # The release workflow's source archive: make release-archive VERSION=1.2.3
 release-archive: $(ENSURE)
