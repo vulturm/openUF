@@ -9927,4 +9927,18 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "inform: UniFi's sibling element follows the identity's sysid unless conf.lua turns it off",
+		fn = function()
+			local saved = inform._sysid
+			inform._sysid = "a652"
+			assert_eq(inform._peer_sysid(nil), "a652", "no config: on")
+			assert_eq(inform._peer_sysid({config = {}}), "a652", "absent: on")
+			assert_eq(inform._peer_sysid({config = {unifi_sibling_ie = true}}), "a652", "true: on")
+			assert_nil(inform._peer_sysid({config = {unifi_sibling_ie = false}}), "false: ours alone")
+			inform._sysid = nil
+			assert_nil(inform._peer_sysid(nil), "an identity with no sysid: ours alone")
+			inform._sysid = saved
+		end
+	},
 }

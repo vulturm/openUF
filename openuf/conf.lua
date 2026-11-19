@@ -209,6 +209,15 @@ config = {
 	-- and this does nothing. Set false to leave hostapd's list alone.
 	neighbour_list = true,
 
+	-- Tell genuine UniFi APs on the same site that this AP is one of theirs.
+	-- Every VAP beacons a small element naming this AP's adopted MAC; openUF
+	-- APs read openUF's own, but a real UniFi AP reads only UniFi's, and
+	-- without it reports this AP's SSIDs as a rogue impersonating the site.
+	-- On, every VAP also carries UniFi's layout, with the MAC and the model
+	-- (ufmodel `sysid`) this AP already presents to the controller. Set false
+	-- to beacon openUF's element alone.
+	unifi_sibling_ie = true,
+
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->
 	-- Device Authentication). true creates the site's device login on this
 	-- AP with the password the controller pushes (as a hash), and removes it
