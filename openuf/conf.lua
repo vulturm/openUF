@@ -163,7 +163,9 @@ config = {
 	-- boot. A sweep runs in four-channel chunks, one per heartbeat, so the
 	-- radio is never off the air for more than ~0.5 s at a time (a whole-band
 	-- sweep in one go dropped every client); still, it is off unless you turn
-	-- it on; 300 is sane.
+	-- it on; 300 is sane. On a wireless (mesh) child the radio the uplink
+	-- rides is left out, here and in the controller's nightly scan: its
+	-- off-channel steps would cut every client's traffic, not one band's.
 	neighbour_scan_interval = 0,
 
 	-- Client-assisted RF environment enrichment (802.11k beacon reports) --

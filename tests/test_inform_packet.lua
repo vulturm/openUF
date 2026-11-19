@@ -5423,6 +5423,24 @@ return {
 				assert_true(inform._scan_job_tick(), "radio1 swept")
 				t = 1910
 				assert_true(inform._maybe_scan_neighbours(cfg, ctx), "sweep over and the interval long past: the next one starts")
+				-- A wireless child: the radio its uplink rides is left out.
+				inform._scan_jobs = {}
+				local o_bh, o_err = inform._backhaul, io.stderr
+				local said = {}
+				io.stderr = {write = function(_, s) said[#said + 1] = s end}
+				inform._backhaul = {uplink_radio = function(st) return st and st.backhaul_mode == "wireless" and "radio0" or nil end}
+				t = 2300
+				assert_true(inform._maybe_scan_neighbours(cfg, ctx, {backhaul_mode = "wireless"}), "the other radio is still swept")
+				assert_eq(#inform._scan_jobs, 1, "one job: the uplink radio is skipped")
+				assert_eq(inform._scan_jobs[1].radio.name, "radio1", "and it is the radio without the uplink")
+				assert_contains(table.concat(said), "radio0 left out", "the skip is logged")
+				inform._scan_jobs = {}
+				t = 2700
+				assert_true(inform._maybe_scan_neighbours(cfg, ctx, {backhaul_mode = "wired"}), "wired again")
+				assert_eq(#inform._scan_jobs, 2, "a cabled AP sweeps every radio")
+				inform._scan_jobs = {}
+				assert_eq(inform._spectrum_scan(cfg, nil, "quick-scan"), 2, "a scan the controller asks for still sweeps everything")
+				inform._backhaul, io.stderr = o_bh, o_err
 				inform._scan_jobs = {}
 				inform._sysinfo.radio_stats, inform._sysinfo.phy_frequencies = o_stats, o_freqs
 				inform._scan_jobs = {}

@@ -28,6 +28,10 @@ Wireless provisioning is in [wireless.md](wireless.md); VLANs and the switch in
   cache the result lands in all live in the daemon; a second implementation in the hook
   would drift. A request older than the cutoff is what a stopped daemon leaves behind, and
   firing it at the next boot would land in hostapd's ACS sweep.
+- **The automatic sweeps skip the radio a wireless uplink rides** (`_scan_all_radios`, from
+  `backhaul.uplink_radio`): an off-channel step takes the station along, and on a mesh child
+  every client's traffic leaves through it. Only the interval and the nightly `11k-scan`;
+  a Quick Scan or Spectrum Scan the controller is asked for still sweeps every radio.
 - **A capability bit is claimed only where a device-side probe passes**, and the probe is
   cached: `sae_supported` (`radio_caps2` 0x1/0x2), `owe_supported` (0x8), `airtime.supported`
   (`wifi_caps` 0x20), `ppsk_supported` (0x100000), `hs20_supported` (`fw_caps` 0x800000 +
