@@ -96,9 +96,20 @@ if command -v luarocks >/dev/null 2>&1; then
 	eval "$(luarocks path --local 2>/dev/null)"
 fi
 DIST_LOG=$(mktemp "${TMPDIR:-/tmp}/openuf-dist.XXXXXX") || exit 1
-if [ "$VERIFY" = 1 ]; then DIST_ARGS="--verify"; else DIST_ARGS=""; fi
+if [ "$VERIFY" = 1 ]; then DIST_ARGS="--verify"; MAKE_TARGET=verify; else DIST_ARGS=""; MAKE_TARGET=dist; fi
+# No Lua on this machine: build in the Makefile's Lua 5.1 image, as CI does. The ssh
+# half stays here, on the host that holds the keys.
+if command -v lua >/dev/null 2>&1; then
+	BUILD="sh tools/dist.sh $DIST_ARGS"
+elif command -v make >/dev/null 2>&1 && { command -v podman || command -v docker; } >/dev/null 2>&1; then
+	echo "  (no lua here: building in the test image, make $MAKE_TARGET)"
+	BUILD="make --no-print-directory $MAKE_TARGET"
+else
+	echo "no lua, and no podman/docker for the test image; cannot build" >&2
+	exit 1
+fi
 # shellcheck disable=SC2086
-if ! sh tools/dist.sh $DIST_ARGS > "$DIST_LOG" 2>&1 || [ ! -f openuf.tar.gz ]; then
+if ! $BUILD > "$DIST_LOG" 2>&1 || [ ! -f openuf.tar.gz ]; then
 	tail -12 "$DIST_LOG"
 	rm -f "$DIST_LOG"
 	echo "dist.sh failed; nothing deployed" >&2
