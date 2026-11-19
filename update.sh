@@ -70,7 +70,15 @@ done
 # ─── What is installed ──────────────────────────────────────────────────────
 status_val() { sed -n "s/^$1=//p" "$STATUS_FILE" 2>/dev/null | head -1; }
 installed_build() { cat "$INSTALL_DIR/BUILD" 2>/dev/null || echo "unknown (no BUILD stamp)"; }
+# A package install takes the modelmap from /etc/config/openuf whenever it has a
+# `main` section (conf.lua's header), and conf.lua is then only the shipped
+# default: reading conf.lua alone reported generic-dualband-ap on a hAP ac whose
+# UCI had been switched to mikrotik-hap-ac, and the daemon was running the latter.
 installed_modelmap() {
+	if command -v uci >/dev/null 2>&1 && uci -q get openuf.main >/dev/null 2>&1; then
+		echo "$(uci -q get openuf.main.modelmap || echo auto) (UCI openuf.main.modelmap)"
+		return 0
+	fi
 	sed -n 's/^dev = dofile("modelmap\/\(.*\)\.lua")$/\1/p' "$INSTALL_DIR/conf.lua" 2>/dev/null | head -1
 }
 
@@ -84,7 +92,12 @@ show_installed() {
 	say "  modelmap    $(installed_modelmap)"
 	if [ -f "$STATE_DIR/state.json" ]; then
 		say "  adopted     $(grep -q '"adopted":true' "$STATE_DIR/state.json" && echo yes || echo no)"
-		say "  identity    $(sed -n 's/.*"mac":"\([^"]*\)".*/\1/p' "$STATE_DIR/state.json")"
+		# The MAC the running daemon informs as is in the status file; state.json's
+		# can be a stale one from before the identity changed, which is the case
+		# --check is most often run to diagnose.
+		_mac=$(status_val mac)
+		[ -n "$_mac" ] || _mac=$(sed -n 's/.*"mac":"\([^"]*\)".*/\1/p' "$STATE_DIR/state.json")
+		say "  identity    $_mac"
 	fi
 	if [ -f "$STATUS_FILE" ]; then
 		_now=$(date +%s); _ok=$(status_val last_ok); _fail=$(status_val last_fail)
