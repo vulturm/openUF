@@ -498,6 +498,52 @@ return {
 		end
 	},
 	{
+		name = "modelmap: an identity_mac_file, where a map names one, is an absolute path get_identity accepts",
+		fn = function()
+			each_modelmap(function(name, dev)
+				local f = dev.conf and dev.conf.net and dev.conf.net.identity_mac_file
+				if f ~= nil then
+					assert_true(type(f) == "string" and f:match("^/[%w%._/%-]+$") ~= nil,
+						name .. ": identity_mac_file is an absolute path with no shell characters, got "
+						.. tostring(f))
+				end
+			end)
+		end
+	},
+	{
+		name = "modelmap: mikrotik-hap-ac names the switch trunk, never the SFP cage",
+		fn = function()
+			-- From board.d (`0@eth0` "2:lan".."5:lan" "1:wan") and one unit
+			-- measured. On the generic map this board's
+			-- lan_cpueth was eth1 -- the SFP cage, outside br-lan -- so it
+			-- informed as 0.0.0.0 under a random MAC and built VLAN bridges
+			-- on eth1.<vid>, uplinked to nothing.
+			local dev = dofile(MODELMAP_DIR .. "/mikrotik-hap-ac.lua")
+			assert_eq(table.concat(dev.openwrt_boards, " "),
+				"mikrotik,routerboard-962uigs-5hact2hnt", "the one compatible string")
+			assert_eq(dev.conf.net.lan_cpueth, "eth0", "the tagged trunk, not eth1 (SFP) or eth0.1")
+			assert_eq(dev.conf.net.identity_mac_file, "/sys/firmware/mikrotik/hard_config/mac_base",
+				"the identity is RouterBoot's label MAC: eth0 and eth1 are random every boot")
+			assert_eq(dev.conf.vlan.cpu_lan, 0, "CPU port 0 serves the LAN VLAN")
+			assert_eq(dev.conf.vlan.cpu_wan, 0, "and the WAN VLAN: one CPU port")
+			assert_nil(dev.conf.led, "green:user is procd's (led-boot/failsafe/upgrade)")
+
+			local ports, phys = dev.conf.net.ports, {}
+			assert_eq(#ports, 5, "five RJ45 sockets; the SFP is not one")
+			for _, p in ipairs(ports) do
+				assert_nil(p.uplink, "port " .. p.idx .. " is not statically the uplink")
+				assert_nil(p.ifname, "port " .. p.idx .. " is a switch port, never eth1")
+				phys[#phys + 1] = dev.conf.vlan.ports[p.swport]
+			end
+			table.sort(phys)
+			assert_eq(table.concat(phys, ","), "1,2,3,4,5", "switch ports 1-5, never CPU 0 or 6")
+			assert_eq(dev.conf.vlan.ports.ether1, 1, "ether1 (Internet, PoE in) is board.d's 1:wan")
+
+			assert_eq(table.concat(dev.openuf.uap.hwassign, ","), "radio0,radio1", "both radios")
+			assert_eq(dev.openuf.uap.ufmodel, "u6iw", "the validated identity")
+		end
+	},
+	{
 		name = "modelmap: deco-m5 pins the two-socket IPQ4019 DSA board for all three revisions",
 		fn = function()
 			-- Board-specific regression guard, from the OpenWrt tree rather
