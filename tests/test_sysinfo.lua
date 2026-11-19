@@ -1064,6 +1064,25 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: ubnt_name_ie_hex() builds UniFi's device-name element, clean and bounded",
+		fn = function()
+			-- The layout a current-firmware AP beacons: 00156d 01 <name>.
+			assert_eq(sysinfo.ubnt_name_ie_hex("ap-kitchen"), "dd0e00156d0161702d6b69746368656e",
+				"the name, the length byte covering OUI, type and name")
+			assert_eq(sysinfo.ubnt_name_ie_hex("ap\n-kit\0chen\127"), sysinfo.ubnt_name_ie_hex("ap-kitchen"),
+				"control characters dropped")
+			local long = sysinfo.ubnt_name_ie_hex(string.rep("a", 40))
+			assert_eq(#long, 4 + 2 * (4 + sysinfo.UBNT_NAME_MAX), "cut to UBNT_NAME_MAX bytes")
+			-- 31 ASCII bytes then a 2-byte UTF-8 character: the character would
+			-- straddle the cut, so it goes whole.
+			local utf = sysinfo.ubnt_name_ie_hex(string.rep("a", 31) .. "\195\169" .. "b")
+			assert_eq(utf, sysinfo.ubnt_name_ie_hex(string.rep("a", 31)), "no half UTF-8 character")
+			assert_nil(sysinfo.ubnt_name_ie_hex(""), "empty: no element")
+			assert_nil(sysinfo.ubnt_name_ie_hex("\1\2"), "nothing printable: no element")
+			assert_nil(sysinfo.ubnt_name_ie_hex(nil), "no name: no element")
+		end
+	},
+	{
 		name = "sysinfo: peer_ie_hex() adds UniFi's element after ours when given a sysid",
 		fn = function()
 			local ours = "dd0d026f556f55460100005e005320"

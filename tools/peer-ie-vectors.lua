@@ -37,6 +37,8 @@ local vectors = {
 	{"00156d0001010001", "null"},                          -- shorter than the fixed head
 	{"00156d00010100010293a6", "null"},                    -- no TLVs
 	{"00156d00010100010293a6ff", "null"},                  -- a tag with no length byte
+	-- UniFi's device-name element (sysinfo.ubnt_name_ie_hex) is no sibling tag
+	{sysinfo.ubnt_name_ie_hex("ap-kitchen"):sub(5), "null"},
 	-- what openUF itself beacons for a genuine UniFi AP (sysinfo.ubnt_ie_hex)
 	{sysinfo.ubnt_ie_hex("00:00:5e:00:53:27", "a652"):sub(5), "00:00:5e:00:53:27"},
 }
