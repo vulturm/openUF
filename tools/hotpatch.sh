@@ -47,7 +47,26 @@ echo "$HOST: running tree is $DIR -- patching with: $STAMP"
 # Ship the same comment-stripped tree a release ships (tools/dist.sh), so a
 # device deploy.sh already updated sees no difference; conf.lua and the
 # profiles stay out. Then install with backups.
-sh tools/dist.sh >/dev/null 2>&1 || { echo "tools/dist.sh failed" >&2; exit 1; }
+# No Lua on this machine: build in the Makefile's Lua 5.1 image, as deploy.sh
+# does -- this bare call failed with "lua: command not found" on a host without
+# Lua, hidden behind ">/dev/null", as a one-line "tools/dist.sh failed". The
+# old build/openuf goes first, so a failed build cannot ship the previous one.
+rm -rf build/openuf
+if command -v lua >/dev/null 2>&1; then
+	BUILD="sh tools/dist.sh"
+elif command -v make >/dev/null 2>&1 && { command -v podman || command -v docker; } >/dev/null 2>&1; then
+	echo "  (no lua here: building in the test image, make dist)"
+	BUILD="make --no-print-directory dist"
+else
+	echo "no lua, and no podman/docker for the test image; cannot build" >&2
+	exit 1
+fi
+DIST_LOG=$(mktemp "${TMPDIR:-/tmp}/openuf-dist.XXXXXX") || exit 1
+if ! $BUILD > "$DIST_LOG" 2>&1; then
+	tail -12 "$DIST_LOG"; rm -f "$DIST_LOG"
+	echo "tools/dist.sh failed" >&2; exit 1
+fi
+rm -f "$DIST_LOG"
 [ -f build/openuf/inform.lua ] || { echo "build/openuf is missing after dist.sh" >&2; exit 1; }
 COPYFILE_DISABLE=1 tar -C build/openuf -cf - \
 	--exclude=conf.lua --exclude=conf.lua.dist --exclude='modelmap' --exclude='ufmodel' \
