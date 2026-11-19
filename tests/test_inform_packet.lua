@@ -7034,6 +7034,17 @@ return {
 			assert_false(inform._steering_flags(none, ""), "no block: per-WLAN only")
 			assert_true(inform._steering_flags(wlan_on, ""), "no block, WLAN on: steers")
 
+			-- The reason recorded for the status file names the WLAN or the device.
+			inform._steering_flags({{no2ghz_oui = true, ssid = "home"}, {no2ghz_oui = true, ssid = "home"},
+				{roam_assist_enabled = true, ssid = "guest"}}, pf)
+			local why = inform._steering_why
+			assert_eq(#why.band_wlans, 1, "one SSID once, though it has two radios")
+			assert_eq(why.band_wlans[1], "home", "the WLAN with Band Steering")
+			assert_eq(why.roam_wlans[1], "guest", "the WLAN with Roaming Assistant")
+			assert_eq(why.band_device, "prefer_5g", "the device's own Band Steering")
+			inform._steering_flags(none, off)
+			assert_eq(inform._steering_why, nil, "nothing asks for usteer: no reason")
+
 			assert_false(inform._steering_flags(none, eq), "equal is not faked as prefer_5g")
 			assert_true(inform._steering_flags(wlan_on, eq), "equal leaves per-WLAN steering")
 			local out = table.concat(logged)

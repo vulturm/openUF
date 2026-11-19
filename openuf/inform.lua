@@ -4188,9 +4188,21 @@ function M._steering_flags(vap_table, sys_raw)
 	-- openuf/roamassist.lua, but it reads usteer's cross-AP view and sends
 	-- 802.11v requests, so it needs the daemon and 802.11k/v the same way.
 	local steering_active, roam_assist_active = false, false
+	-- Which controller setting asked for usteer, for /tmp/openuf-status: the
+	-- portal has to say what to turn off, and "Band Steering is on" sent
+	-- people looking in the wrong place (it is a WLAN switch AND a device one).
+	local why = {band_wlans = {}, roam_wlans = {}}
+	local seen_b, seen_r = {}, {}
 	for _, vap in ipairs(vap_table) do
-		if vap.no2ghz_oui then steering_active = true end
-		if vap.roam_assist_enabled then roam_assist_active = true end
+		local name = type(vap.ssid) == "string" and vap.ssid or "?"
+		if vap.no2ghz_oui then
+			steering_active = true
+			if not seen_b[name] then seen_b[name] = true; why.band_wlans[#why.band_wlans + 1] = name end
+		end
+		if vap.roam_assist_enabled then
+			roam_assist_active = true
+			if not seen_r[name] then seen_r[name] = true; why.roam_wlans[#why.roam_wlans + 1] = name end
+		end
 	end
 	-- The device-level setting adds to the per-WLAN one. "equal" (Balance)
 	-- has no usteer equivalent: usteer balances client counts only by
@@ -4201,6 +4213,7 @@ function M._steering_flags(vap_table, sys_raw)
 	if bs and bs.enabled then
 		if bs.mode == "prefer_5g" then
 			steering_active = true
+			why.band_device = bs.mode
 		elseif not M._warned_bandsteering_mode then
 			M._warned_bandsteering_mode = true
 			io.stderr:write(("inform: device Band Steering mode %q "
@@ -4208,6 +4221,7 @@ function M._steering_flags(vap_table, sys_raw)
 				.. "Band Steering still applies\n"):format(tostring(bs.mode)))
 		end
 	end
+	M._steering_why = (steering_active or roam_assist_active) and why or nil
 	return steering_active, roam_assist_active
 end
 
@@ -8044,6 +8058,12 @@ function M._write_status(st, fields)
 	-- A radio whose driver applies another regulatory domain than UCI's
 	-- (_regd_tick), as radio:have!=want pairs.
 	if M._regd_mismatch then lines[#lines + 1] = "regd_mismatch=" .. M._regd_mismatch end
+	-- What started usteer (_steering_flags), as one JSON object: SSIDs may hold
+	-- any character but a newline, and cjson escapes those too.
+	if M._steering_why then
+		local ok_j, j = pcall(cjson.encode, M._steering_why)
+		if ok_j then lines[#lines + 1] = "steering=" .. j end
+	end
 	local stall = M._backhaul and M._backhaul.ap_stall
 	if type(stall) == "table" then
 		lines[#lines + 1] = ("ap_stall=%s:%s:%s"):format(tostring(stall.radio),
