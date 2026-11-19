@@ -5,7 +5,10 @@
 #   openuf status               the daemon's health file and adoption state
 #   openuf set-inform <url>     point the device at a controller
 #   openuf reset-inform         forget the controller and start over
-#   openuf 11k-scan             ask the daemon to sweep every radio next heartbeat
+#   openuf 11k-scan             the controller's nightly job: two sweeps at random
+#                               times within the hour (syswrapper.lua)
+#   openuf scan-now             one sweep on the next heartbeat (the web pages'
+#                               button); a wireless uplink's radio is left out
 #   openuf start|stop|restart   the procd service
 #   openuf probe status|presets|discover|export
 #                               JSON for the web UI (hook/probe.lua)
@@ -55,6 +58,15 @@ case "$1" in
 			if grep -q '"adopted":true' "$sf"; then echo "adopted   yes"; else echo "adopted   no"; fi
 		fi
 		if /etc/init.d/openuf running 2>/dev/null; then echo "service   running"; else echo "service   stopped"; fi
+		;;
+	scan-now)
+		# The same request file the nightly job writes, with one due time:
+		# now. `11k-scan` spreads its two over an hour, as UniFi firmware does
+		# so that every AP is not off-channel at 04:00 sharp; a button that
+		# promised "within ten seconds" ran it and nothing happened for up to
+		# an hour.
+		date +%s > /tmp/openuf-scan-request || exit 1
+		echo "openuf: neighbour scan requested; it starts on the next heartbeat"
 		;;
 	set-inform|set-adopt|reset-inform|11k-scan)
 		[ -n "$DIR" ] || { echo "openuf: not installed" >&2; exit 1; }
