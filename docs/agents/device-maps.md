@@ -252,6 +252,11 @@ Rarer than a modelmap, and the facts come from Ubiquiti, not OpenWrt:
   `deco-m5` header has the three lines). The JioRouters escape it because `board.d` sets
   `lan`'s MAC for them, the AX3000T because its map names a socket, the Deco M4R v4 because every
   one of its DSA ports inherits the conduit's label MAC.
+- **A netdev whose MAC the kernel made up at boot (`addr_assign_type` 1) is no identity.** A
+  board that keeps its permanent MAC in a file names it in its map,
+  `dev.conf.net.identity_mac_file`, and `announce.get_identity` uses that for both daemons (the
+  hAP ac: RouterBoot's `/sys/firmware/mikrotik/hard_config/mac_base`). Without one lan_cpueth's
+  MAC is used, and a random one is reported loudly at startup -- never replaced by a guess.
 - **On the Deco M4R v4, `eth0` and `eth1` are DSA sockets and the CPU conduit is `dsa`** (OpenWrt
   24.10 renamed them, commit 4fed462454, to keep the stock names working). The daemon keys on the
   name `eth0` in one place only, inform's fallback port table for a map with no `ports`; the generic
