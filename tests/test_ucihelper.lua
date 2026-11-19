@@ -1484,6 +1484,28 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: apply_config adds the name element only to WLANs with Show Access Point Name in Beacon",
+		fn = function()
+			with_ucihelper(function(db)
+				local peer, name = "dd0d026f556f55460100005e005320", "dd0e00156d0161702d6b69746368656e"
+				local resp = {
+					radio_table = {},
+					vap_table = {
+						{ssid = "corp", radio = "radio0", security = "wpa2", x_passphrase = "hunter22",
+						 advertise_ap_name = true},
+						{ssid = "lab", radio = "radio0", security = "wpa2", x_passphrase = "hunter22",
+						 advertise_ap_name = false},
+					},
+				}
+				ucihelper.apply_config(resp, nil, {peer_ie = peer, ap_name_ie = name, device_name = "ap-kitchen"})
+				assert_eq(db.wireless.openuf_radio0_corp.vendor_elements, peer .. name, "on: both elements")
+				assert_eq(db.wireless.openuf_radio0_lab.vendor_elements, peer, "off: the sibling element alone")
+				ucihelper.apply_config(resp, nil, {peer_ie = peer})
+				assert_eq(db.wireless.openuf_radio0_corp.vendor_elements, peer, "no name element offered: none")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_config writes proxy_arp from vap.proxy_arp",
 		fn = function()
 			with_ucihelper(function(db)

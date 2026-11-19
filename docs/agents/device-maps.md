@@ -231,6 +231,9 @@ Rarer than a modelmap, and the facts come from Ubiquiti, not OpenWrt:
   (`sysinfo.ubnt_ie_hex`). A genuine UniFi AP reads only that element: without it, on a mixed
   site, it reports the openUF AP's SSIDs as a rogue impersonating the site (a genuine UniFi
   parent meshing a hAP ac). `unifi_sibling_ie = false` in conf.lua beacons openUF's element alone.
+  A WLAN with "Show Access Point Name in Beacon" also carries UniFi's name element (`00 15 6d 01
+  <name>`, `sysinfo.ubnt_name_ie_hex`, the controller's name for the AP), which scanner apps
+  show instead of the MAC's vendor; only alongside the sibling element.
 - **`buildtime` and `factoryver` are cosmetic**: they reach only the L2 discovery TLVs. Say
   in the file where the values came from rather than making them look captured.
 - **What the model registry says about the code cannot be read from the device side.**

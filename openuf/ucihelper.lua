@@ -2730,7 +2730,12 @@ function M.apply_config(resp, cfg, opts)
 			-- without it the controller lists it as a rogue impersonating the
 			-- network). Removed when the identity MAC is unknown rather than
 			-- left announcing a stale one.
-			extra.vendor_elements = (opts and opts.peer_ie) or M.DELETE
+			-- "Show Access Point Name in Beacon" adds UniFi's name element too
+			-- (opts.ap_name_ie, sysinfo.ubnt_name_ie_hex): what a genuine AP
+			-- beacons for that WLAN option, and what scanner apps show.
+			local ve = ((opts and opts.peer_ie) or "")
+				.. ((vap.advertise_ap_name and opts and opts.ap_name_ie) or "")
+			extra.vendor_elements = (ve ~= "") and ve or M.DELETE
 			if vap.hide_ssid ~= nil then
 				-- "Hide WiFi Name": leave the SSID out of beacons (clients must
 				-- know the name to associate). OpenWrt's wifi-iface option is

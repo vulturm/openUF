@@ -4885,6 +4885,11 @@ function M.handle_response(json_str, st, cfg)
 							roam_assist_active = roam_assist_active,
 							device_name = device_name, keep_vlans = port_vlans,
 							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac, M._peer_sysid(cfg)),
+							-- UniFi's name element, for the WLANs with "Show
+							-- Access Point Name in Beacon" on; only alongside
+							-- UniFi's sibling element (unifi_sibling_ie).
+							ap_name_ie = M._peer_sysid(cfg)
+								and M._sysinfo.ubnt_name_ie_hex(device_name) or nil,
 							ap_off_radios = M._ap_off_radios(st, cfg),
 							backhaul = backhaul_plan})
 					M._deny_reloaded()   -- apply_config ran `wifi reload`

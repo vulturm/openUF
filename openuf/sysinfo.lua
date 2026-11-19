@@ -585,6 +585,31 @@ function M.ubnt_ie_hex(mac, sysid)
 		.. "8106" .. hex
 end
 
+-- UniFi's device-name element, as a genuine AP beacons it when the WLAN has
+-- "Show Access Point Name in Beacon" on: dd <len> | 00 15 6d | 01 | <name>
+-- (read off a current-firmware AP's beacon). Scanner apps show that name for
+-- the BSS instead of the MAC's vendor. The controller's own name for this AP,
+-- control characters dropped, cut to 32 bytes without splitting a UTF-8
+-- character; nil when nothing is left.
+M.UBNT_NAME_MAX = 32
+function M.ubnt_name_ie_hex(name)
+	if type(name) ~= "string" then return nil end
+	local clean = name:gsub("[%z\1-\31\127]", "")
+	if #clean > M.UBNT_NAME_MAX then
+		clean = clean:sub(1, M.UBNT_NAME_MAX)
+		-- drop a trailing partial UTF-8 sequence
+		local i = #clean
+		while i > 0 and clean:byte(i) >= 0x80 and clean:byte(i) < 0xC0 do i = i - 1 end
+		if i > 0 and clean:byte(i) >= 0xC0 then
+			local need = clean:byte(i) >= 0xF0 and 4 or clean:byte(i) >= 0xE0 and 3 or 2
+			if #clean - i + 1 < need then clean = clean:sub(1, i - 1) end
+		end
+	end
+	if clean == "" then return nil end
+	local hex = clean:gsub(".", function(c) return string.format("%02x", c:byte()) end)
+	return string.format("dd%02x", 4 + #clean) .. M.UBNT_IE_OUI .. "01" .. hex
+end
+
 -- The hostapd vendor_elements value (each element as hex, concatenated)
 -- announcing mac ("xx:xx:xx:xx:xx:xx"), or nil when mac is not a MAC. Ours
 -- always; UniFi's as well when sysid is given (ubnt_ie_hex). Ours stays even
