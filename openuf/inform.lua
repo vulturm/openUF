@@ -4240,18 +4240,51 @@ function M._local_steering_gate(vap_table, cfg, steering_active, roam_assist_act
 	return false, false
 end
 
--- The gate above only acts on a push, and a restart with an unchanged
--- cfgversion gets none (`noop`): flipping the option would leave usteer as it
--- was until the controller next changed something. Forget cfgversion when the
--- option differs from the one the last push was applied with, as
--- _reconcile_plugins does for the plugin set.
-function M._reconcile_local_steering(st, cfg)
-	local want = (cfg and cfg.config and cfg.config.controller_steering == false) and "off" or "on"
-	if (st.steering_local or "on") == want then return false end
-	if st.adopted and st.cfgversion ~= "" then st.cfgversion = "" end
-	st.steering_local = want
+-- The local options a push is applied WITH: each only acts inside
+-- apply_config, and a restart with an unchanged cfgversion gets no push
+-- (`noop`). Saving uplink_radio_aps = false in the web page left the uplink
+-- radio's SSIDs on the air until the controller next changed something.
+-- An option added here applies at once; one left out waits for a push. Each
+-- with the value an absent key means to the code that reads it, so "0" and
+-- unset are one state, not a push apart.
+--   use_only_unifi_wlan  ucihelper.set_wlan_exclusive, inside apply_config
+--   device_login         the login is created from the hash a push carries
+M.PUSH_OPTIONS = {
+	{"controller_steering", true}, {"uplink_radio_aps", true}, {"unifi_sibling_ie", true},
+	{"use_only_unifi_wlan", false}, {"device_login", false},
+}
+
+function M._push_options_fp(cfg)
+	local c = cfg and cfg.config or {}
+	local parts = {}
+	for i, o in ipairs(M.PUSH_OPTIONS) do
+		local v = c[o[1]]
+		if v == nil then v = o[2] end
+		parts[i] = o[1] .. "=" .. (v == true and "on" or "off")
+	end
+	return table.concat(parts, ";")
+end
+
+-- Forget cfgversion when those options differ from the ones the last push
+-- was applied with, as _reconcile_plugins does for the plugin set, so the
+-- controller pushes again and the change takes effect within a heartbeat.
+function M._reconcile_local_options(st, cfg)
+	local want = M._push_options_fp(cfg)
+	-- Never recorded (a device from before this): its last push was applied
+	-- with the defaults, unless controller_steering had its own record. A
+	-- device whose use_only_unifi_wlan is on (setup.sh's choice) is pushed
+	-- once for it, which changes nothing it already has.
+	local had = st.push_options
+	if had == nil then
+		had = M._push_options_fp({config = {controller_steering = (st.steering_local ~= "off")}})
+	end
+	local changed = had ~= want
+	if st.push_options == want and not changed then return false end
+	st.push_options = want
+	st.steering_local = nil
+	if changed and st.adopted and st.cfgversion ~= "" then st.cfgversion = "" end
 	M._state.save(st)
-	return true
+	return changed
 end
 
 -- Parse the `switch.*` block: per-port VLAN assignment.
@@ -8700,7 +8733,7 @@ function M.run(cfg, ufhw)
 	end
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	M._reconcile_plugins(st, cfg)
-	M._reconcile_local_steering(st, cfg)
+	M._reconcile_local_options(st, cfg)
 	M._migrate_legacy_rrb(st, cfg)
 	-- Blocked-client nft rules are live kernel state, not persisted UCI --
 	-- reapply from state.json on every fresh start (mirrors the bootstrap

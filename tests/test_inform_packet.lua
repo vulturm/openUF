@@ -7047,24 +7047,44 @@ return {
 		end
 	},
 	{
-		name = "inform: a change of controller_steering forgets cfgversion once, so a push applies it",
+		name = "inform: a change of a push-time local option forgets cfgversion once, so a push applies it",
 		fn = function()
 			local saved = 0
 			local orig = inform._state
 			inform._state = {save = function() saved = saved + 1 end}
+			local ok, err = pcall(function()
 			local st = {adopted = true, cfgversion = "abc"}
-			assert_false(inform._reconcile_local_steering(st, {config = {}}), "default on, never set: no push")
+			assert_false(inform._reconcile_local_options(st, {config = {}}), "first record at the defaults: no push")
 			assert_eq(st.cfgversion, "abc", "cfgversion kept")
-			assert_true(inform._reconcile_local_steering(st, {config = {controller_steering = false}}), "turned off")
+			assert_false(inform._reconcile_local_options(st, {config = {}}), "unchanged")
+			-- A device that set an option before it was recorded: pushed once.
+			local old = {adopted = true, cfgversion = "x"}
+			assert_true(inform._reconcile_local_options(old, {config = {uplink_radio_aps = false}}), "non-default, unrecorded: push")
+			assert_eq(old.cfgversion, "", "forgotten")
+			-- Unset and the default are one state: no push between them.
+			assert_eq(inform._push_options_fp({config = {use_only_unifi_wlan = false, device_login = false}}),
+				inform._push_options_fp({config = {}}), "explicit defaults read as unset")
+			assert_true(inform._push_options_fp({config = {use_only_unifi_wlan = true}})
+				~= inform._push_options_fp({config = {}}), "use_only_unifi_wlan on is a change")
+			-- controller_steering's own earlier record counts as applied.
+			local prev = {adopted = true, cfgversion = "y", steering_local = "off"}
+			assert_false(inform._reconcile_local_options(prev, {config = {controller_steering = false}}), "already applied")
+			assert_eq(prev.cfgversion, "y", "kept")
+			assert_eq(prev.steering_local, nil, "the old record is dropped")
+			assert_true(inform._reconcile_local_options(st, {config = {controller_steering = false}}), "steering off")
 			assert_eq(st.cfgversion, "", "cfgversion forgotten")
-			assert_eq(st.steering_local, "off", "remembered")
 			st.cfgversion = "def"
-			assert_false(inform._reconcile_local_steering(st, {config = {controller_steering = false}}), "unchanged")
-			assert_eq(st.cfgversion, "def", "no second push")
-			assert_true(inform._reconcile_local_steering(st, {config = {}}), "back on")
+			assert_true(inform._reconcile_local_options(st, {config = {controller_steering = false, uplink_radio_aps = false}}),
+				"uplink radio SSIDs off: applied the same way")
 			assert_eq(st.cfgversion, "", "forgotten again")
-			assert_eq(saved, 2, "saved on each change only")
+			st.cfgversion = "ghi"
+			assert_false(inform._reconcile_local_options(st, {config = {controller_steering = false, uplink_radio_aps = false,
+				neighbour_scan_interval = 900}}), "a runtime option is not a reason to push")
+			assert_eq(st.cfgversion, "ghi", "kept")
+			assert_eq(saved, 5, "saved on each record and change")
+			end)
 			inform._state = orig
+			if not ok then error(err, 0) end
 		end
 	},
 	{
