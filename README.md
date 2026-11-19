@@ -179,10 +179,13 @@ shell for busybox; the constraints are listed in [CLAUDE.md](CLAUDE.md). Before 
 request:
 
 ```sh
-eval $(luarocks path --local) && lua tests/run_tests.lua   # the suite, pure Lua, no hardware
-bash -n setup.sh && dash -n setup.sh                         # both shells, for every script touched
-sh tools/dist.sh --verify                                    # the stripped tree is bytecode-identical and still passes
+make ci     # in a Lua 5.1 container (podman or docker), exactly what CI runs:
+            # shell syntax under bash and dash, the suite, the adoption simulation,
+            # and dist.sh --verify (the stripped tree is bytecode-identical and still passes)
 ```
+
+`make test`, `make sh-check`, `make simulate` and `make verify` run one step each;
+`LOCAL=1` runs on the host with your own Lua 5.1 and rocks.
 
 A new test file is registered in `tests/run_tests.lua`. Comments explain *why*, naming the
 failure that motivated the code. Where a fact cannot be determined, report nothing rather
