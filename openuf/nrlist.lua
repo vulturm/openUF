@@ -57,6 +57,11 @@ M._encode = function(t) return require("cjson").encode(t) end
 
 -- How long a sibling stays in the list after it was last scanned.
 M.REMEMBER = 3600
+-- Where the remembered siblings outlive a daemon restart (a hotpatch, a save
+-- in the web page): in RAM, so a reboot still starts empty. Before this every
+-- restart dropped the siblings only a sweep finds, and the lists named this
+-- AP's other band alone until the next one, up to neighbour_scan_interval.
+M.STORE = "/tmp/openuf-nrlist.json"
 -- bssid -> {ssid, freq, channel, at}
 M._seen = {}
 
@@ -80,6 +85,38 @@ function M.expire(now)
 	for bssid, e in pairs(M._seen) do
 		if now - (e.at or 0) > M.REMEMBER then M._seen[bssid] = nil end
 	end
+end
+
+-- Write M._seen to M.STORE (tmp + rename: a reader never sees half a file).
+function M.save()
+	local ok, js = pcall(M._encode, M._seen)
+	if not ok or type(js) ~= "string" then return false end
+	local tmp = M.STORE .. ".tmp"
+	local f = io.open(tmp, "w")
+	if not f then return false end
+	f:write(js)
+	f:close()
+	return os.rename(tmp, M.STORE) and true or false
+end
+
+-- Read M.STORE back into M._seen, keeping only well-formed, unexpired
+-- entries; what this run has observed already wins. Returns how many.
+function M.load(now)
+	local f = io.open(M.STORE, "r")
+	if not f then return 0 end
+	local t = M._decode(f:read("*a") or "")
+	f:close()
+	local n = 0
+	for bssid, e in pairs(type(t) == "table" and t or {}) do
+		if util.is_mac(bssid) and type(e) == "table" and type(e.ssid) == "string"
+		   and tonumber(e.freq) and tonumber(e.channel) and tonumber(e.at)
+		   and now - tonumber(e.at) <= M.REMEMBER and not M._seen[bssid:lower()] then
+			M._seen[bssid:lower()] = {ssid = e.ssid, freq = tonumber(e.freq),
+				channel = tonumber(e.channel), at = tonumber(e.at)}
+			n = n + 1
+		end
+	end
+	return n
 end
 
 -- ─── The element ─────────────────────────────────────────────────────────────

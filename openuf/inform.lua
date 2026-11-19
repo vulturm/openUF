@@ -6705,11 +6705,22 @@ M.NRLIST_SETTLE   = 20
 -- list empty for five.
 M.NRLIST_RELOAD_WINDOW = 180
 M.NRLIST_RETRY    = 30
-M._nrlist_next    = 0
+M._nrlist_next    = nil
 M._nrlist_reload_at = nil
+-- The first write after the daemon starts waits this long: a write at once
+-- held no sibling yet (none observed, the scan cache not read), and the next
+-- came NRLIST_INTERVAL later, so every restart left clients with this AP's
+-- other band alone for five minutes. Two heartbeats' build_json have read the
+-- cache by then.
+M.NRLIST_FIRST    = 25
 function M._nrlist_tick(st, cfg)
 	if not M._nrlist_enabled(cfg) then return 0 end
 	local now = M._time()
+	if M._nrlist_next == nil then
+		if M._nrlist.load then pcall(M._nrlist.load, now) end
+		M._nrlist_next = now + M.NRLIST_FIRST
+		return 0
+	end
 	if now < M._nrlist_next then return 0 end
 	M._nrlist_next = now + M.NRLIST_INTERVAL
 	-- usteer owns the list where openUF runs it (nrlist.lua's header).
@@ -6761,6 +6772,8 @@ function M._nrlist_tick(st, cfg)
 			end
 		end
 	end
+	-- What this pass knew outlives a daemon restart (nrlist.STORE).
+	if M._nrlist.save then pcall(M._nrlist.save) end
 	return written
 end
 
