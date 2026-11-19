@@ -10005,7 +10005,10 @@ return {
 			assert_eq(by.radio0.tx_power, "auto", "Auto: the stale Custom 1 dBm is ignored")
 			assert_eq(by.radio1.tx_power, 17, "Custom: the number")
 			assert_eq(by.radio2.tx_power, 12, "no mode on the wire: the number, as before")
-			assert_eq(inform._tx_power_from_wire("high", "14"), 14, "an unseen mode: no guessed meaning")
+			assert_eq(inform._tx_power_from_wire("turbo", "14"), 14, "an unseen mode: no guessed meaning")
+			assert_eq(inform._tx_power_from_wire("low", "1"), "low", "low: the mode, not the stale Custom 1")
+			assert_eq(inform._tx_power_from_wire("medium", "auto"), "medium", "medium beside txpower=auto")
+			assert_eq(inform._tx_power_from_wire("high", "1"), "high", "high")
 			assert_nil(inform._tx_power_from_wire(nil, nil), "nothing: leave UCI alone")
 			assert_eq(inform._tx_power_from_wire(nil, "auto"), "auto", "txpower=auto alone: auto")
 		end

@@ -2554,15 +2554,18 @@ local _IEEE_MODE_WIDTHS = { ["20"] = true, ["40"] = true, ["80"] = true,
 	["160"] = true, ["320"] = true }
 
 -- A radio's transmit power from the push. `radio.<n>.txpower_mode` is the
--- control (auto/custom/disabled on the wire so far) and `radio.<n>.txpower`
--- only the Custom value -- which the controller keeps sending after the
--- switch goes back to Auto, so reading `txpower` alone kept a radio at its
--- last Custom dBm (1 dBm, on a board whose power had been lowered once to
--- force a push). Auto wins over any number; Custom takes the number; a mode
--- not seen on the wire yet keeps the reading this had before modes were
--- read, rather than a guessed meaning.
+-- control and `radio.<n>.txpower` only the Custom value -- which the
+-- controller keeps sending under every other mode (captured: low, medium,
+-- high and auto all arrived with the last Custom `txpower=1`, and a radio
+-- whose Custom was never set sends `txpower=auto` under medium). Reading
+-- `txpower` alone kept a radio at its last Custom dBm whatever the mode. So:
+-- auto -> "auto" (the driver's maximum); low/medium/high -> the mode itself,
+-- which rf_config turns into a share of the band's maximum (TX_POWER_SHARE);
+-- custom -> the number; a mode not seen on the wire -> the old reading.
+M.TX_POWER_MODES = {low = true, medium = true, high = true}
 local function _tx_power_from_wire(mode, txpower)
 	if mode == "auto" then return "auto" end
+	if M.TX_POWER_MODES[mode] then return mode end
 	return tonumber(txpower) or (txpower == "auto" and "auto" or nil)
 end
 M._tx_power_from_wire = _tx_power_from_wire

@@ -1164,6 +1164,34 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: rf_config turns Low/Medium/High into a share of the band's maximum dBm",
+		fn = function()
+			with_ucihelper(function(db)
+				seed_radios()
+				local cursor = ucihelper._uci.cursor()
+				cursor:set("wireless", "radio0", "band", "2g")
+				cursor:set("wireless", "radio1", "band", "5g")
+				local orig = ucihelper.phy_caps
+				local caps = {ng = {max_txpower = 29}, na = {max_txpower = 23}}
+				ucihelper.phy_caps = function() return caps end
+				ucihelper.rf_config("radio0", nil, nil, "low")
+				assert_eq(db.wireless.radio0.txpower, "9", "low: 30% of 29 dBm")
+				ucihelper.rf_config("radio0", nil, nil, "medium")
+				assert_eq(db.wireless.radio0.txpower, "17", "medium: 60%")
+				ucihelper.rf_config("radio0", nil, nil, "high")
+				assert_eq(db.wireless.radio0.txpower, "26", "high: 90%")
+				ucihelper.rf_config("radio1", nil, nil, "medium")
+				assert_eq(db.wireless.radio1.txpower, "14", "the 5 GHz band's own maximum")
+				ucihelper.rf_config("radio0", nil, nil, "auto")
+				assert_nil(db.wireless.radio0.txpower, "auto: the driver's maximum")
+				caps = {}
+				ucihelper.rf_config("radio1", nil, nil, "low")
+				assert_eq(db.wireless.radio1.txpower, "14", "no maximum known: left as it was")
+				ucihelper.phy_caps = orig
+			end)
+		end
+	},
+	{
 		name = "ucihelper: rf_config and apply_config commit the wireless config",
 		fn = function()
 			-- The mock db is always-live, so a dropped cursor:commit is
