@@ -56,6 +56,9 @@
 				"/usr/bin/openuf ota --status": [
 					"exec"
 				],
+				"/usr/bin/openuf scan-now": [
+					"exec"
+				],
 				"/proc/cpuinfo": [
 					"read"
 				]
