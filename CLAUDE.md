@@ -23,7 +23,17 @@ hand-edit on the device, so it (and `modelmap/*`) keep their comments when packa
 ## Commands
 
 ```sh
-# Tests. Must run from the project root — test files dofile("openuf/...") relatively.
+# The usual way: everything in a Lua 5.1 container (tools/testenv/Dockerfile, podman or
+# docker), the same image and the same targets CI runs -- no Lua needed on the host.
+# The Dockerfile is the one list of packages, the Makefile the one list of checks: a new
+# dependency or a new check goes there, never into a workflow's own `run:`.
+make test          # the suite, GCM required    make sh-check  bash -n + dash -n, every script
+make simulate      # adoption round-trip        make verify    dist.sh --verify
+make ci            # all four                   make shell     a shell in the image
+# LOCAL=1 runs any target on the host instead; deploy.sh builds in the image when the
+# host has no lua.
+
+# Tests on the host. Must run from the project root — test files dofile("openuf/...") relatively.
 eval $(luarocks path --local) && lua tests/run_tests.lua
 
 # End-to-end adoption round-trip against the Python controller stub
@@ -46,7 +56,7 @@ sh tools/deploy.sh <ap-ip>...           # OPENUF_SSH_PASS=... for a password-pro
 # which on a device that also has the package installed is the dormant copy.
 sh tools/hotpatch.sh [--repush] <ap-ip>  # --repush blanks cfgversion for a full config push
 
-# Shell syntax — BOTH, every time (see "Shell code" below)
+# Shell syntax — BOTH, every time (see "Shell code" below); `make sh-check` does all of them
 bash -n setup.sh && dash -n setup.sh
 ```
 
