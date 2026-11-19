@@ -5404,8 +5404,10 @@ return {
 				assert_true(inform._maybe_scan_neighbours(cfg, ctx), "queues a sweep once the interval is up")
 				assert_eq(#cmds, 0, "nothing on the air yet: sweeps run in chunks, one per heartbeat")
 				assert_eq(#inform._scan_jobs, 2, "one job per radio")
+				inform._nrlist_next = 99999
 				assert_true(inform._scan_job_tick(), "first heartbeat: radio0")
 				assert_true(inform._scan_job_tick(), "second: radio1")
+				assert_eq(inform._nrlist_next, 0, "a finished sweep writes the 802.11k lists on the next tick")
 				assert_eq(#cmds, 2, "one sweep per radio")
 				assert_contains(cmds[1], "iw dev phy0-ap0 scan ap-force", "the same forced sweep the spectrum-scan cmd uses")
 				assert_contains(cmds[2], "iw dev phy1-ap0 scan ap-force", "on the second radio too")

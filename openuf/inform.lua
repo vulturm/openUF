@@ -7588,6 +7588,9 @@ function M._scan_job_tick()
 	end
 	if not job.freqs or job.next > #job.freqs then
 		table.remove(M._scan_jobs, 1)
+		-- A finished sweep has just shown the siblings on other channels:
+		-- write the 802.11k lists now rather than up to NRLIST_INTERVAL later.
+		M._nrlist_next = 0
 	end
 	return true
 end
