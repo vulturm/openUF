@@ -121,21 +121,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.ref }}
-      - name: Install Lua 5.1 and the bindings the suite needs
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y lua5.1 liblua5.1-dev lua-bitop luarocks openssl libssl-dev dash
-          sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
-          sudo luarocks --lua-version 5.1 install lua-cjson LUA_INCDIR=/usr/include/lua5.1
-          # lua-openssl (rock "openssl"): crypto.lua's AES binding, no CLI fallback.
-          sudo luarocks --lua-version 5.1 install openssl LUA_INCDIR=/usr/include/lua5.1
+      # Lua 5.1 and the rocks come from tools/testenv/Dockerfile, as in test.yml.
       - name: Shell syntax, both shells
-        run: |
-          for f in setup.sh install.sh update.sh tools/deploy.sh tools/dist.sh \
-              tools/release-archive.sh openuf/etc/init.d/openuf openuf/hook/*.sh \
-              package/openuf/test.sh; do
-            bash -n "$f" && dash -n "$f"
-          done
+        run: make sh-check ENGINE=docker
       # One archive, openuf-<version>.tar.gz: the OpenWrt package builds from
       # it, and it is also a manual install -- unpack and run install.sh
       # inside, or hand it to setup.sh (OPENUF_TARBALL_URL) or openuf-update
@@ -145,7 +133,7 @@ jobs:
       - name: Build the source archive (dist.sh --verify runs the suite on the stripped tree)
         id: meta
         run: |
-          sh tools/release-archive.sh "$VERSION"
+          make release-archive ENGINE=docker VERSION="$VERSION"
           echo "sha256=$(cut -d' ' -f1 "openuf-$VERSION.tar.gz.sha256")" >> "$GITHUB_OUTPUT"
       - name: Create the release (and its tag) unless it exists, then attach the source archive
         env:
