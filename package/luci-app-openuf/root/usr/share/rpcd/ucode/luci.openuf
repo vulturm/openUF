@@ -204,7 +204,22 @@ function roaming_state() {
 			btm_requests: st.wnm ? st.wnm.bss_transition_request_tx : null
 		});
 	}
+	// Why usteer runs, as the daemon decided it at the last push
+	// (inform.lua _steering_flags): the WLANs with Band Steering or Roaming
+	// Assistant, and the device's own Band Steering.
+	let why = null;
+	const status = readfile('/tmp/openuf-status');
+	const line = status ? match(status, /(^|\n)steering=([^\n]*)/) : null;
+	if (line) {
+		try {
+			why = json(line[2]);
+		}
+		catch (e) {
+			why = null;
+		}
+	}
 	return {
+		steering: (type(why) == 'object') ? why : null,
 		// pidof, not `pgrep -x`: busybox's -x matches the whole command line
 		// (/sbin/usteerd), so it reported a running usteer as stopped.
 		usteer: shell_ok('pidof usteerd'),
