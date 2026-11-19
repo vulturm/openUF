@@ -383,6 +383,9 @@ if command -v apk >/dev/null 2>&1; then
 	pkg_add_v()     { apk add "$@"; }
 	pkg_del()       { apk del "$@" >/dev/null 2>&1; }
 	pkg_update()    { apk update >/dev/null 2>&1; }
+	pkg_upgrade()   { apk upgrade "$@"; }
+	# "NAME-VERSION arch {origin} ..." -> VERSION, empty when not installed.
+	pkg_version()   { apk list -I "$1" 2>/dev/null | sed -n "s/^$1-\([0-9][^ ]*\) .*/\1/p" | head -1; }
 elif command -v opkg >/dev/null 2>&1; then
 	PKG=opkg
 	PKG_ADD="opkg install"
@@ -391,6 +394,8 @@ elif command -v opkg >/dev/null 2>&1; then
 	pkg_add_v()     { opkg install "$@"; }
 	pkg_del()       { opkg remove "$@" >/dev/null 2>&1; }
 	pkg_update()    { opkg update >/dev/null 2>&1; }
+	pkg_upgrade()   { opkg upgrade "$@"; }
+	pkg_version()   { opkg list-installed "$1" 2>/dev/null | sed -n "s/^$1 - \([^ ]*\).*/\1/p" | head -1; }
 else
 	die "neither apk nor opkg found; cannot install dependencies."
 fi
@@ -1458,6 +1463,33 @@ else
 	[ -f "$PKG_DIR/inform.lua" ] \
 		|| die "the package manager reported success but $PKG_DIR/inform.lua is missing"
 	ok "installed openuf and luci-app-openuf${P_THEME:+ and luci-theme-halo}"
+
+	# uhttpd and its ucode plugin are one source package and must be one
+	# build: a release feed is rebuilt after the image, and an image without
+	# LuCI gets uhttpd-mod-ucode from the feed beside the image's own uhttpd.
+	# A 25.12.0 hAP ac got plugin 2026.11.05 under uhttpd 2025.10.03, and
+	# uhttpd died at every start with "Unable to open ucode handler: Bad
+	# address" -- no web interface at all, LuCI's own handler included.
+	# Upgrading the installed half of the family to the feed's build is the
+	# only fix: the feed no longer carries the image's version.
+	_uh=$(pkg_version uhttpd); _uc=$(pkg_version uhttpd-mod-ucode)
+	if [ -n "$_uh" ] && [ -n "$_uc" ] && [ "$_uh" != "$_uc" ]; then
+		warn "uhttpd $_uh does not match uhttpd-mod-ucode $_uc; upgrading both to the feed's build"
+		_fam=""
+		for p in uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uhttpd-mod-lua; do
+			pkg_installed "$p" && _fam="$_fam $p"
+		done
+		# shellcheck disable=SC2086
+		pkg_upgrade $_fam || true
+		_uh=$(pkg_version uhttpd); _uc=$(pkg_version uhttpd-mod-ucode)
+		if [ "$_uh" = "$_uc" ]; then
+			ok "uhttpd and uhttpd-mod-ucode both at $_uh"
+			/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+		else
+			warn "uhttpd is still $_uh against uhttpd-mod-ucode $_uc: the web interface will not"
+			warn "start. Once the feed is reachable: $PKG update && $PKG upgrade$_fam"
+		fi
+	fi
 
 	head1 "Configuring openUF"
 
