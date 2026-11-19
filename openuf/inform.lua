@@ -2559,9 +2559,9 @@ local _IEEE_MODE_WIDTHS = { ["20"] = true, ["40"] = true, ["80"] = true,
 -- high and auto all arrived with the last Custom `txpower=1`, and a radio
 -- whose Custom was never set sends `txpower=auto` under medium). Reading
 -- `txpower` alone kept a radio at its last Custom dBm whatever the mode. So:
--- auto -> "auto" (the driver's maximum); low/medium/high -> the mode itself,
--- which rf_config turns into a share of the band's maximum (TX_POWER_SHARE);
--- custom -> the number; a mode not seen on the wire -> the old reading.
+-- auto/low/medium/high -> the mode itself, which rf_config turns into a share
+-- of the band's maximum (ucihelper.TX_POWER_SHARE); custom -> the number; a
+-- mode not seen on the wire -> the old reading.
 M.TX_POWER_MODES = {low = true, medium = true, high = true}
 local function _tx_power_from_wire(mode, txpower)
 	if mode == "auto" then return "auto" end
@@ -3214,11 +3214,11 @@ function M._parse_wifi_system_cfg(sys_raw)
 				-- overriding the user's switch back to Auto. Absent/garbage
 				-- still -> nil, leaving UCI alone.
 				channel  = tonumber(r.channel) or (r.channel == "auto" and "auto" or nil),
-				-- "auto" passes through as a sentinel like channel above, but
-				-- lands differently: UCI has no auto txpower value (absent
-				-- option = driver default/max), so rf_config DELETES the
-				-- option for it. Dropping it to nil instead stranded the last
-				-- fixed dBm in UCI, silently overriding the user's switch
+				-- "auto" passes through as a sentinel like channel above:
+				-- UCI has no auto txpower value, so rf_config writes a share
+				-- of the band's maximum for it (or deletes the option when the
+				-- maximum is unknown). Dropping it to nil instead stranded the
+				-- last fixed dBm in UCI, silently overriding the user's switch
 				-- back to Auto. Absent/garbage still -> nil, leaving UCI alone.
 				-- txpower_mode decides (_tx_power_from_wire): `txpower` is
 				-- only the Custom value, and it outlives the switch to Auto.
