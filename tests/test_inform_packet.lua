@@ -7013,6 +7013,41 @@ return {
 		end
 	},
 	{
+		name = "inform: controller_steering=false stops usteer on this AP only",
+		fn = function()
+			local vaps = {{no2ghz_oui = true, roam_assist_enabled = true, ssid = "home"}}
+			local s, r = inform._local_steering_gate(vaps, {config = {}}, true, true)
+			assert_true(s and r, "absent option: the controller's settings stand")
+			assert_true(vaps[1].no2ghz_oui, "absent option: the vap keeps its flags")
+			s, r = inform._local_steering_gate(vaps, {config = {controller_steering = false}}, true, true)
+			assert_false(s, "off: usteer does not band-steer")
+			assert_false(r, "off: usteer is not kept for Roaming Assistant")
+			assert_true(vaps[1].no2ghz_oui, "off: the WLAN's Band Steering flag is left to apply_config")
+			assert_false(vaps[1].roam_assist_enabled, "off: no roam-assist stamp, roamassist stays quiet")
+		end
+	},
+	{
+		name = "inform: a change of controller_steering forgets cfgversion once, so a push applies it",
+		fn = function()
+			local saved = 0
+			local orig = inform._state
+			inform._state = {save = function() saved = saved + 1 end}
+			local st = {adopted = true, cfgversion = "abc"}
+			assert_false(inform._reconcile_local_steering(st, {config = {}}), "default on, never set: no push")
+			assert_eq(st.cfgversion, "abc", "cfgversion kept")
+			assert_true(inform._reconcile_local_steering(st, {config = {controller_steering = false}}), "turned off")
+			assert_eq(st.cfgversion, "", "cfgversion forgotten")
+			assert_eq(st.steering_local, "off", "remembered")
+			st.cfgversion = "def"
+			assert_false(inform._reconcile_local_steering(st, {config = {controller_steering = false}}), "unchanged")
+			assert_eq(st.cfgversion, "def", "no second push")
+			assert_true(inform._reconcile_local_steering(st, {config = {}}), "back on")
+			assert_eq(st.cfgversion, "", "forgotten again")
+			assert_eq(saved, 2, "saved on each change only")
+			inform._state = orig
+		end
+	},
+	{
 		name = "inform: device Band Steering prefer_5g turns steering on; off and equal leave per-WLAN alone",
 		fn = function()
 			local orig_stderr = io.stderr
