@@ -1164,6 +1164,34 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: an uplink station is never an SSID's netdev, not even as a radio's only interface",
+		fn = function()
+			local orig = ucihelper._popen
+			-- radio0: only the mesh uplink's station (its SSIDs are off);
+			-- radio1: one AP whose ssid netifd reported differently.
+			ucihelper._popen = function(cmd)
+				if cmd == "ubus call network.wireless status" then
+					return [[{"radio0":{"interfaces":[{"section":"openuf_bh_ul_radio0","ifname":"phy0-sta0",
+						"config":{"mode":"sta","ssid":"vwire-x"}}]},
+						"radio1":{"interfaces":[{"section":"openuf_radio1_corp","ifname":"phy1-ap0",
+						"config":{"mode":"ap","ssid":"corp2"}}]}}]]
+				end
+				return ""
+			end
+			if ucihelper.end_pass then ucihelper.end_pass() end
+			local sta_one = ucihelper.get_ifname_for_vap("radio0", "corp")
+			local sta_all = ucihelper.get_ifnames_for_vap("radio0", "corp")
+			local sta_ssid = ucihelper.get_ifname_for_vap("radio0", "vwire-x")
+			local ap_one = ucihelper.get_ifname_for_vap("radio1", "corp")
+			ucihelper._popen = orig
+			if ucihelper.end_pass then ucihelper.end_pass() end
+			assert_nil(sta_one, "the station is not the off SSID's netdev")
+			assert_eq(#sta_all, 0, "so the SSID lists no station of its own")
+			assert_nil(sta_ssid, "not even under its own ssid: it is no AP")
+			assert_eq(ap_one, "phy1-ap0", "a radio's only AP is still the fallback")
+		end
+	},
+	{
 		name = "ucihelper: rf_config turns Auto/Low/Medium/High into a share of the band's maximum dBm",
 		fn = function()
 			with_ucihelper(function(db)
