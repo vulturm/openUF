@@ -283,4 +283,47 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "nrlist: the remembered siblings survive a daemon restart through STORE, and expire there too",
+		fn = function()
+			local orig = nrlist.STORE
+			nrlist.STORE = os.tmpname()
+			nrlist._seen = {}
+			nrlist.observe({peer_mac = "aa:aa:aa:aa:aa:01", bssid = "AA:BB:CC:DD:EE:01", essid = "home",
+				channel = 1, freq = 2412}, 1000)
+			nrlist.observe({peer_mac = "aa:aa:aa:aa:aa:01", bssid = "aa:bb:cc:dd:ee:02", essid = "home",
+				channel = 124, freq = 5620}, 1000 - nrlist.REMEMBER)
+			assert_true(nrlist.save(), "written")
+			nrlist._seen = {}
+			assert_eq(nrlist.load(1001), 1, "the fresh one comes back, the expired one does not")
+			assert_eq(nrlist._seen["aa:bb:cc:dd:ee:01"].channel, 1, "with its channel")
+			-- What this run already saw wins over the file.
+			nrlist._seen = {["aa:bb:cc:dd:ee:01"] = {ssid = "home", freq = 2412, channel = 6, at = 1005}}
+			assert_eq(nrlist.load(1006), 0, "kept the newer observation")
+			assert_eq(nrlist._seen["aa:bb:cc:dd:ee:01"].channel, 6, "the newer channel")
+			local f = io.open(nrlist.STORE, "w"); f:write("not json"); f:close()
+			nrlist._seen = {}
+			assert_eq(nrlist.load(1001), 0, "a garbled file is ignored")
+			os.remove(nrlist.STORE)
+			assert_eq(nrlist.load(1001), 0, "no file: nothing")
+			nrlist.STORE = orig
+		end
+	},
+	{
+		name = "inform: the first neighbour-list write after a start waits NRLIST_FIRST and loads the store",
+		fn = function()
+			local o = {inform._nrlist, inform._time, inform._nrlist_next}
+			local loaded, t = 0, 5000
+			inform._time = function() return t end
+			inform._nrlist = {load = function() loaded = loaded + 1 end}
+			inform._nrlist_next = nil
+			local ok, err = pcall(function()
+				assert_eq(inform._nrlist_tick({}, {config = {}}), 0, "nothing written at once")
+				assert_eq(loaded, 1, "the store is read on the first tick")
+				assert_eq(inform._nrlist_next, 5000 + inform.NRLIST_FIRST, "the first write waits")
+			end)
+			inform._nrlist, inform._time, inform._nrlist_next = o[1], o[2], o[3]
+			if not ok then error(err, 0) end
+		end
+	},
 }
