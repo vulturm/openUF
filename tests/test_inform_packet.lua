@@ -9941,4 +9941,25 @@ return {
 			inform._sysid = saved
 		end
 	},
+	{
+		name = "inform: the status file carries ap_stall only while a wireless child's APs cannot start",
+		fn = function()
+			local o_file, o_bh = inform.STATUS_FILE, inform._backhaul
+			local path = os.tmpname()
+			inform.STATUS_FILE = path
+			local function read()
+				local f = io.open(path); local t = f:read("*a"); f:close(); return t
+			end
+			inform._backhaul = {ap_stall = {radio = "radio0", channel = 124, reason = "dfs"}}
+			inform._write_status({}, {})
+			local stalled = read()
+			inform._backhaul = {ap_stall = nil}
+			inform._write_status({}, {})
+			local fine = read()
+			inform.STATUS_FILE, inform._backhaul = o_file, o_bh
+			os.remove(path)
+			assert_true(stalled:find("\nap_stall=radio0:124:dfs\n", 1, true) ~= nil, "flat key=value, as the updater parses it")
+			assert_true(fine:find("ap_stall", 1, true) == nil, "absent once the APs beacon")
+		end
+	},
 }

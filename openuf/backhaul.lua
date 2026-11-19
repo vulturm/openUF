@@ -348,6 +348,9 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 
 	if new_mode == "wireless" and mode == "wireless" then
 		pcall(M.follow_parent_channel, st, ufuci, sta_if, secs[1].radio)
+		pcall(M.check_ap_stall, sta_if, secs[1].radio)
+	elseif M.ap_stall or M._stall_ticks > 0 then
+		M._stall_ticks, M.ap_stall = 0, nil   -- on the wire: the station is down by design
 	end
 
 	if M._dirty and state_mod and state_mod.save then
@@ -401,6 +404,117 @@ function M.follow_parent_channel(st, ufuci, sta_if, radio)
 		:format(radio, tostring(ufuci.radio_channel(radio)), chan))
 	ufuci.set_radio_channel(radio, chan)
 	return chan
+end
+
+-- ─── A child whose APs cannot start on the parent's channel ─────────────────
+--
+-- The station drags the radio onto the parent's channel and hostapd starts the
+-- APs there (apsta). On a DFS channel that start needs a CAC the radio has not
+-- done, and a CAC cannot run while the station holds the radio: the kernel
+-- refuses the beacon ("Failed to set beacon parameters") and hostapd still
+-- reports every BSS ENABLED. A hAP ac (ath10k) under a UniFi parent on a DFS
+-- channel sat like that for hours with not one SSID on 5 GHz, the
+-- uplink healthy and nothing anywhere saying so. Only drivers with DFS
+-- concurrency (an AP may follow a station onto a channel it has not cleared)
+-- escape it; ath10k is not one.
+--
+-- So: when the station is up and no AP of its phy is beaconing for
+-- STALL_TICKS heartbeats, say so, once, and why when it can be proven -- the
+-- channel carries "Radar detection" and its DFS state is not "available".
+-- Otherwise the reason is "unknown", never a guessed DFS. A CAC in progress
+-- (hostapd's own status "DFS") is not a stall.
+M.STALL_TICKS = 3
+M._stall_ticks = 0
+M.ap_stall = nil       -- {radio, channel, reason = "dfs"|"unknown", dfs_state}
+
+-- Every AP-type interface of phy (e.g. "phy0") in `iw dev` output, and which of
+-- them beacon: iw prints an `ssid` line only for a started AP. AP/VLAN
+-- netdevs (dynamic VLANs) are not BSSes and are left out.
+function M.phy_aps(iwdev, phy)
+	local aps, cur_phy, cur = {}, nil, nil
+	local function flush()
+		if cur and cur.ap then aps[#aps + 1] = {ifname = cur.name, beaconing = cur.ssid} end
+		cur = nil
+	end
+	for line in (iwdev or ""):gmatch("[^\n]+") do
+		local p = line:match("^phy#(%d+)")
+		if p then
+			flush()
+			cur_phy = "phy" .. p
+		elseif cur_phy == phy then
+			local i = line:match("^%s+Interface%s+(%S+)")
+			if i then
+				flush()
+				cur = {name = i}
+			elseif cur then
+				if line:match("^%s+type AP%s*$") then cur.ap = true end
+				if line:match("^%s+ssid ") then cur.ssid = true end
+			end
+		end
+	end
+	flush()
+	return aps
+end
+
+-- {radar = bool, state = "usable"|"available"|"unavailable"|nil} for freq in
+-- `iw phy <phy> channels` output; nil when the channel is not listed.
+function M.channel_dfs(channels, freq)
+	local out
+	for line in (channels or ""):gmatch("[^\n]+") do
+		local f = line:match("^%s*%*%s*(%d+) MHz")
+		if f then
+			if out then break end
+			if tonumber(f) == freq then out = {radar = false} end
+		elseif out then
+			if line:match("Radar detection") then out.radar = true end
+			local s = line:match("DFS state:%s*(%a+)")
+			if s then out.state = s end
+		end
+	end
+	return out
+end
+
+function M.check_ap_stall(sta_if, radio)
+	if not valid_ifname(sta_if) then return nil end
+	local link = M._popen("iw dev " .. sta_if .. " link") or ""
+	local freq = link:match("Connected to") and tonumber(link:match("freq:%s*(%d+)"))
+	local phy = (M._read_file("/sys/class/net/" .. sta_if .. "/phy80211/name") or ""):match("^(phy%d+)")
+	local aps = (freq and phy) and M.phy_aps(M._popen("iw dev"), phy) or {}
+	local silent = #aps > 0
+	for _, a in ipairs(aps) do
+		if a.beaconing then silent = false end
+	end
+	if silent then
+		-- A CAC hostapd is running is what a DFS start should look like.
+		local st = M._popen("ubus call hostapd." .. aps[1].ifname .. " get_status 2>/dev/null") or ""
+		if st:match('"status":%s*"DFS"') then silent = false end
+	end
+	if not silent then
+		if M.ap_stall then
+			M._log(("%s: the APs are on the air again (channel %s)")
+				:format(tostring(M.ap_stall.radio), tostring(channel_of(freq) or "?")))
+		end
+		M._stall_ticks, M.ap_stall = 0, nil
+		return nil
+	end
+	M._stall_ticks = M._stall_ticks + 1
+	if M._stall_ticks < M.STALL_TICKS or M.ap_stall then return M.ap_stall end
+	local chan = channel_of(freq)
+	local dfs = M.channel_dfs(M._popen("iw phy " .. phy .. " channels"), freq)
+	local is_dfs = dfs and dfs.radar and dfs.state ~= "available"
+	M.ap_stall = {radio = radio, channel = chan, reason = is_dfs and "dfs" or "unknown",
+		dfs_state = dfs and dfs.state or nil}
+	if is_dfs then
+		M._log(("%s: no SSID is on the air -- the parent is on DFS channel %d (DFS state %s, no CAC "
+			.. "done) and this radio cannot clear it while the station holds it. Move the parent to "
+			.. "a non-DFS channel, or serve clients from another radio")
+			:format(tostring(radio), chan, tostring(dfs.state)))
+	else
+		M._log(("%s: no SSID is on the air on channel %s although the uplink is up -- "
+			.. "hostapd did not start the APs (logread | grep hostapd)")
+			:format(tostring(radio), tostring(chan or "?")))
+	end
+	return M.ap_stall
 end
 
 -- The radio the station rides while the uplink is wireless, else nil.
