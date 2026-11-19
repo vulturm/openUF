@@ -1630,6 +1630,12 @@ end
 -- from the controller (Settings -> Radios). The board policy above wins where
 -- it forbids DFS: a radio whose driver cannot run CAC stays off DFS whatever
 -- the site allows.
+-- Transmit Power Low/Medium/High as a share of the band's maximum dBm
+-- (rf_config). The controller sends no number for them and the UniFi
+-- firmware's own mapping is not known here, so these are openUF's: three
+-- clearly different steps, High just under the maximum Auto gives.
+M.TX_POWER_SHARE = {low = 0.3, medium = 0.6, high = 0.9}
+
 function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, rates,
 		disabled, country, radio_policy, opts)
 	local uci = get_uci()
@@ -1805,7 +1811,22 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 		end
 		cursor:set("wireless", radio, "htmode", clamped)
 	end
-	if txpwr == "auto" then
+	if M.TX_POWER_SHARE[txpwr] then
+		-- Low/Medium/High: the controller sends no dBm for them (only the
+		-- mode, beside a stale Custom value), so the AP decides. A share of
+		-- the band's maximum as `iw phy` lists it -- the regulatory limit the
+		-- driver applies -- rounded, never below 1 dBm. Unknown maximum:
+		-- nothing written, and said so, rather than a guessed dBm.
+		local caps = M.phy_caps()
+		local max = band and caps and caps[band] and tonumber(caps[band].max_txpower)
+		if max and max > 0 then
+			local dbm = math.max(1, math.floor(max * M.TX_POWER_SHARE[txpwr] + 0.5))
+			cursor:set("wireless", radio, "txpower", tostring(dbm))
+		else
+			io.stderr:write(string.format("openuf: %s: transmit power %s needs the band's maximum, "
+				.. "which iw phy did not give -- left as it was\n", radio, txpwr))
+		end
+	elseif txpwr == "auto" then
 		-- UCI has no auto txpower value: absent option = driver default/max.
 		-- Deleting is what makes "Transmit Power: Auto" actually revert a
 		-- previously pushed fixed dBm instead of stranding it.
