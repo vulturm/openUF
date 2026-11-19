@@ -302,17 +302,20 @@
 	}
 
 	async function loadSettings() {
-		const [status, presets, main, web] = await Promise.all([
+		const [status, presets, main, web, roaming] = await Promise.all([
 			ubus(sid, 'luci.openuf', 'getStatus'),
 			ubus(sid, 'luci.openuf', 'listPresets'),
 			ubus(sid, 'uci', 'get', { config: 'openuf', section: 'main' }).catch(() => null),
-			ubus(sid, 'uci', 'get', { config: 'openuf', section: 'web' }).catch(() => null)
+			ubus(sid, 'uci', 'get', { config: 'openuf', section: 'web' }).catch(() => null),
+			// An older backend has no getRoaming: the group then shows the
+			// switch alone.
+			ubus(sid, 'luci.openuf', 'getRoaming').catch(() => null)
 		]);
 		// No `main` section: openUF was installed from the tarball and runs
 		// from conf.lua. Creating the section would put UCI in charge of the
 		// daemon with almost nothing in it, so those fields stay read-only.
 		settings = {
-			status, presets,
+			status, presets, roaming,
 			hasMain: !!(main && main.values),
 			hasWeb: !!(web && web.values),
 			values: Object.assign({}, main && main.values, web && web.values)
@@ -432,6 +435,54 @@
 		}
 	}
 
+	const BAND = f => !f ? '' : f < 3000 ? '2.4 GHz' : f < 5950 ? '5 GHz' : '6 GHz';
+
+	// 802.11k/v/r in one place, and whose neighbour list clients actually
+	// get. Band Steering and Roaming Assistant are the controller's switches,
+	// so the page explains the trade instead of offering a toggle the next
+	// config push would undo: with either on, usteer runs and rewrites every
+	// list each second with the APs that run usteer, so genuine UniFi APs
+	// are never named (nrlist.lua's header).
+	function roamingGroup(ro) {
+		const r = settings.roaming;
+		const listOn = value('neighbour_list', '1') === '1';
+		let note = null;
+		if (r && r.usteer)
+			note = h('div', { class: 'notice warn' }, h('span', { html: ICON.info }), h('span', {},
+				h('strong', {}, 'Band Steering or Roaming Assistant is on in the controller. '),
+				'usteer then keeps the neighbour lists and names only access points that run usteer: genuine UniFi access points are left out, and openUF\'s list is not used. ',
+				'To give clients the whole site, turn both off on this site\'s networks in the controller. Clients then roam by themselves with 802.11k and fast roaming, but are no longer moved to 5 GHz or away from a weak access point.'));
+		else if (r && listOn)
+			note = h('div', { class: 'notice' }, h('span', { html: ICON.info }), h('span', {},
+				'openUF keeps the neighbour lists: the site\'s other access points on the same network, openUF and UniFi alike, and this one\'s other band. Band Steering and Roaming Assistant are off.'));
+		const rows = [
+			row('Tell clients about nearby access points', 'Answer 802.11k neighbour requests with the site\'s other access points, so clients roam to the right one.', toggle('neighbour_list', '1', ro), { inline: true })
+		];
+		for (const b of (r && r.bss) || []) {
+			const parts = [];
+			if (!b.rrm) parts.push('802.11k off');
+			else {
+				parts.push(b.neighbours === 1 ? '1 neighbour' : b.neighbours + ' neighbours');
+				if (b.nr_requests != null) parts.push(b.nr_requests + ' asked');
+				if (b.btm_requests) parts.push(b.btm_requests + ' moved');
+			}
+			const line = row(b.ssid || b.ifname, [BAND(b.freq), b.channel ? 'channel ' + b.channel : null, b.ifname].filter(Boolean).join(' · '),
+				h('span', { class: 'value' }, parts.join(' · ')), { inline: true });
+			// What a client asking this BSS is told, entry by entry: the quickest
+			// way to see a missing access point, without SSH.
+			if (b.list && b.list.length)
+				line.querySelector('.meta').append(h('details', { class: 'nbrs' }, h('summary', {}, 'Show list'),
+					h('ul', {}, b.list.map(n => h('li', {},
+						(n.self ? 'This access point, ' : '') + (n.ssid || '') + ' · ' + n.bssid + (n.channel ? ' · channel ' + n.channel : ''))))));
+			rows.push(line);
+		}
+		if (r)
+			rows.push(row('Fast roaming with UniFi access points', 'The 802.11r translator (rrb-unifi) that lets clients hand over between this access point and genuine UniFi ones without a full reconnect.',
+				h('span', { class: 'value' }, r.rrb_unifi ? 'Installed' : 'Not installed'), { inline: true }));
+		return h('div', { class: 'group card' },
+			h('div', { class: 'group-title' }, 'Roaming'), note, ...rows);
+	}
+
 	function renderForm(root) {
 		const ro = !settings.hasMain;   // tarball install: conf.lua is in charge
 		const st = settings.status || {};
@@ -481,9 +532,10 @@
 			row('Announce on the local network', 'Let UniFi Network discover this access point without typing its address.', toggle('l2_announce', '1', ro), { inline: true }),
 			// Defaults are uciconf.lua's (and conf.lua's): an option the
 			// section does not hold must show what the daemon actually does.
-			row('Recognised by UniFi access points', 'Beacon the element genuine UniFi access points look for, so they do not report this one\'s networks as a rogue impersonating the site.', toggle('unifi_sibling_ie', '1', ro), { inline: true }),
-			row('Tell clients about nearby access points', 'Answer 802.11k neighbour requests with the site\'s other access points, so clients roam to the right one. Where Band Steering or Roaming Assistant is on, usteer keeps this list instead, and it names only access points that run usteer: genuine UniFi ones are left out.', toggle('neighbour_list', '1', ro), { inline: true })
+			row('Recognised by UniFi access points', 'Beacon the element genuine UniFi access points look for, so they do not report this one\'s networks as a rogue impersonating the site.', toggle('unifi_sibling_ie', '1', ro), { inline: true })
 		));
+
+		groups.push(roamingGroup(ro));
 
 		// The controller's Environment view. A value set by hand that is not
 		// one of the steps stays selectable, or opening the page would offer
