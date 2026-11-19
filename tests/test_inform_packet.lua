@@ -9717,4 +9717,35 @@ return {
 			assert_true(fine:find("ap_stall", 1, true) == nil, "absent once the APs beacon")
 		end
 	},
+	{
+		name = "inform: uplink_radio_aps = false keeps the wireless uplink's radio free of SSIDs, and re-asks on a switch",
+		fn = function()
+			local o_bh, o_state = inform._backhaul, inform._state
+			local radio = "radio0"
+			inform._backhaul = {uplink_radio = function() return radio end}
+			assert_nil(inform._ap_off_radios({}, nil), "no config: every radio serves")
+			assert_nil(inform._ap_off_radios({}, {config = {uplink_radio_aps = true}}), "true: as before")
+			local off = {config = {uplink_radio_aps = false}}
+			local r = inform._ap_off_radios({}, off)
+			assert_true(r and r.radio0 == true, "false: the uplink's radio")
+			radio = nil
+			assert_nil(inform._ap_off_radios({}, off), "uplink on the wire: every radio serves")
+
+			local saves = 0
+			inform._state = {save = function() saves = saves + 1 end}
+			local next_mode = "wired"
+			inform._backhaul = {tick = function(st) st.backhaul_mode = next_mode; return next_mode end}
+			local st = {adopted = true, cfgversion = "abc", backhaul_mode = "wireless"}
+			inform._backhaul_tick(st, {config = {}})
+			assert_eq(st.cfgversion, "abc", "option on: a switch changes no WLAN")
+			st.backhaul_mode, next_mode = "wireless", "wired"
+			inform._backhaul_tick(st, off)
+			assert_eq(st.cfgversion, "", "option off: the switch asks for a push")
+			assert_eq(saves, 1, "and is saved")
+			st.cfgversion = "def"
+			inform._backhaul_tick(st, off)
+			assert_eq(st.cfgversion, "def", "no switch, no push")
+			inform._backhaul, inform._state = o_bh, o_state
+		end
+	},
 }

@@ -228,6 +228,16 @@ config = {
 	-- more than one board.
 	dfs_cac_recover = false,
 
+	-- A wireless (mesh) child serves clients on its uplink radio too, by
+	-- default. false keeps that radio for the uplink alone while the uplink
+	-- is wireless: its SSIDs are written but disabled, every other radio
+	-- carries them as usual, and they come back by themselves when a cable
+	-- takes over the uplink. The controller cannot do this -- it greys out
+	-- the radio switch on the uplink band of a meshed AP. Worth it where that
+	-- radio is the slower one's only way out (a 2x2 80 MHz child sharing its
+	-- channel with its own backhaul) or where the parent sits on DFS channels.
+	uplink_radio_aps = true,
+
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->
 	-- Device Authentication). true creates the site's device login on this
 	-- AP with the password the controller pushes (as a hash), and removes it

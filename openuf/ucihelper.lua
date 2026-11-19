@@ -2268,6 +2268,16 @@ function M.apply_config(resp, cfg, opts)
 			if vap.disabled ~= nil then
 				extra.disabled = vap.disabled and "1" or "0"
 			end
+			-- uplink_radio_aps = false (inform._ap_off_radios): the radio the
+			-- wireless uplink rides carries no SSID. Written whole, only
+			-- disabled, exactly like a WLAN switched off in the controller.
+			if opts and type(opts.ap_off_radios) == "table" and opts.ap_off_radios[vap.radio] then
+				if extra.disabled ~= "1" then
+					io.stderr:write(string.format("ucihelper: WLAN %q not on %s -- it carries the "
+						.. "wireless uplink (uplink_radio_aps = false)\n", tostring(vap.ssid), tostring(vap.radio)))
+				end
+				extra.disabled = "1"
+			end
 			-- The controller carries two independent FT toggles: ft.status
 			-- for the WLAN and wpa3.ft.status for the SAE akm alone (the
 			-- latter only on SAE pushes, so nil elsewhere). OpenWrt cannot
