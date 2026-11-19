@@ -552,19 +552,49 @@ end
 --   dd 0d | 02 6f 55 (OUI) | 6f 55 46 ("oUF") | 01 (version) | 6-byte MAC
 -- The OUI is deliberately NOT Ubiquiti's 00:27:22 -- a real UniFi AP parsing
 -- our layout as theirs would read garbage -- and the magic makes a collision
--- with any real user of 02:6f:55 harmless in both directions.
+-- with any real user of 02:6f:55 harmless in both directions. A genuine UniFi
+-- AP is now told in its own layout instead (ubnt_ie_hex, below).
 M.PEER_IE_OUI   = "02:6f:55"
 M.PEER_IE_MAGIC = "6f5546"
 M.PEER_IE_VER   = "01"
 
--- The hostapd vendor_elements value (the whole element as hex) announcing
--- mac ("xx:xx:xx:xx:xx:xx"), or nil when mac is not a MAC.
-function M.peer_ie_hex(mac)
+-- UniFi's own element, for the GENUINE UniFi APs of a mixed site. Those read
+-- only this one, so a site with a genuine UniFi AP meshing an openUF AP
+-- listed every BSS of the openUF AP as a rogue impersonating the site: the
+-- UniFi AP reported them with no is_unifi, and ours was the only element they
+-- carried. The layout is the one peer_match_ucode reads, checked against a
+-- current-firmware UniFi AP's beacon:
+--   dd 13 | 00 15 6d | 00 01 01 (UniFi AP) | 00 (flags) | 01 02 <sysid, LE>
+--         | 81 06 <identity MAC>
+-- sysid is the EMULATED model's (ufmodel `sysid`, from Ubiquiti's public
+-- device database), little-endian as a genuine AP sends its own. Flags 00 is
+-- what that AP sets on its client BSSes; current firmware's 0x89 (a UUID) is
+-- left out, as 4.0.15 had no such tag. Every value is this device's own: the
+-- MAC the controller adopted it under and the model it presents in every
+-- inform, so the element says nothing the inform does not already say.
+-- nil when either is malformed (an identity with no sysid: a UCI-defined one).
+M.UBNT_IE_OUI = "00156d"
+function M.ubnt_ie_hex(mac, sysid)
+	if type(mac) ~= "string" or type(sysid) ~= "string" then return nil end
+	local hex = mac:lower():gsub(":", "")
+	if not hex:match("^%x+$") or #hex ~= 12 then return nil end
+	local sid = sysid:lower()
+	if not sid:match("^%x%x%x%x$") then return nil end
+	return "dd13" .. M.UBNT_IE_OUI .. "000101" .. "00"
+		.. "0102" .. sid:sub(3, 4) .. sid:sub(1, 2)
+		.. "8106" .. hex
+end
+
+-- The hostapd vendor_elements value (each element as hex, concatenated)
+-- announcing mac ("xx:xx:xx:xx:xx:xx"), or nil when mac is not a MAC. Ours
+-- always; UniFi's as well when sysid is given (ubnt_ie_hex). Ours stays even
+-- then: an openUF build from before the UniFi parser reads only ours.
+function M.peer_ie_hex(mac, sysid)
 	if type(mac) ~= "string" then return nil end
 	local hex = mac:lower():gsub(":", "")
 	if not hex:match("^%x+$") or #hex ~= 12 then return nil end
 	return "dd0d" .. M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC
-		.. M.PEER_IE_VER .. hex
+		.. M.PEER_IE_VER .. hex .. (M.ubnt_ie_hex(mac, sysid) or "")
 end
 
 -- Reading it back cannot go through `iw`: OpenWrt's default iw build strips

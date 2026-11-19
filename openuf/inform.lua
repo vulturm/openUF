@@ -4881,7 +4881,7 @@ function M.handle_response(json_str, st, cfg)
 						cfg, {band_steering_active = steering_active,
 							roam_assist_active = roam_assist_active,
 							device_name = device_name, keep_vlans = port_vlans,
-							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac),
+							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac, M._peer_sysid(cfg)),
 							backhaul = backhaul_plan})
 					M._deny_reloaded()   -- apply_config ran `wifi reload`
 				end
@@ -6598,6 +6598,19 @@ function M._devlogin_push(st, cfg, sys_raw, trusted_response)
 end
 
 -- ─── 802.11k neighbour list (nrlist.lua) ─────────────────────────────────────
+
+-- ─── The sibling element a genuine UniFi AP reads ────────────────────────────
+
+-- The emulated model's sysid (ufmodel `sysid`), set by M.run. With it every VAP
+-- also beacons UniFi's own element (sysinfo.ubnt_ie_hex), without which a
+-- genuine UniFi AP on the site reports this AP's BSSes as rogues. conf.lua
+-- `unifi_sibling_ie = false` switches it off (openUF's element
+-- alone); absent means on. nil also for an identity with no sysid.
+M._sysid = nil
+function M._peer_sysid(cfg)
+	if cfg and cfg.config and cfg.config.unifi_sibling_ie == false then return nil end
+	return M._sysid
+end
 
 -- conf.lua `neighbour_list = false` switches it off; absent means on.
 function M._nrlist_enabled(cfg)
@@ -8381,6 +8394,7 @@ end
 -- cfg, ufhw: passed through to build_json()
 function M.run(cfg, ufhw)
 	local st = state.load()
+	M._sysid = ufhw and ufhw.uap and ufhw.uap.sysid or nil
 	-- The ledger of what the controller sent that nothing here acted on
 	-- (unhandled.lua), loaded before the first response so counts and
 	-- first_seen carry across restarts. conf.lua's unhandled_file names the

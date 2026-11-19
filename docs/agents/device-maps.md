@@ -225,6 +225,12 @@ Rarer than a modelmap, and the facts come from Ubiquiti, not OpenWrt:
   Available" (PROTOCOL-VALIDATION.md, "Why version must be bare"). Since 2026-11-13 `fw.ver`
   is only the starting value: a controller `upgrade` is accepted virtually (`st.fw_version`,
   reported by `build_json` and `announce.lua`), so the badge clears without a hand edit.
+- **`sysid` is not cosmetic.** It comes from Ubiquiti's public device database
+  (`static.ui.com/fingerprint/ui/public.json`, the entry whose `shortnames` hold the model code)
+  and every VAP beacons it, little-endian, in UniFi's own sibling element
+  (`sysinfo.ubnt_ie_hex`). A genuine UniFi AP reads only that element: without it, on a mixed
+  site, it reports the openUF AP's SSIDs as a rogue impersonating the site (a genuine UniFi
+  parent meshing a hAP ac). `unifi_sibling_ie = false` in conf.lua beacons openUF's element alone.
 - **`buildtime` and `factoryver` are cosmetic**: they reach only the L2 discovery TLVs. Say
   in the file where the values came from rather than making them look captured.
 - **What the model registry says about the code cannot be read from the device side.**

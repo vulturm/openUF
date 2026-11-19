@@ -1047,6 +1047,33 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: ubnt_ie_hex() builds UniFi's element as a genuine UniFi AP beacons it",
+		fn = function()
+			-- A genuine AP's client BSS: 00156d 000101 00 0102 <sysid LE> 8106 <MAC>,
+			-- here UAP-AC-HD's e530, sent as 30e5.
+			assert_eq(sysinfo.ubnt_ie_hex("00:00:5E:00:53:21", "e530"),
+				"dd1300156d00010100010230e5810600005e005321", "the firmware's layout, byte for byte")
+			assert_eq(sysinfo.ubnt_ie_hex("00:00:5e:00:53:21", "A652"),
+				"dd1300156d00010100010252a6810600005e005321", "U6IW's sysid, case-folded")
+			assert_eq(sysinfo.ubnt_ie_hex("00:00:5e:00:53:21", nil), nil, "no sysid, no element")
+			assert_eq(sysinfo.ubnt_ie_hex("00:00:5e:00:53:21", "a65"), nil, "a sysid is four hex digits")
+			assert_eq(sysinfo.ubnt_ie_hex("00:00:5e:00:53:21", "zz52"), nil, "...and only hex")
+			assert_eq(sysinfo.ubnt_ie_hex("not-a-mac", "a652"), nil, "no identity, no element")
+			local hex = sysinfo.ubnt_ie_hex("00:00:5e:00:53:21", "a652")
+			assert_eq(tonumber(hex:sub(3, 4), 16), (#hex - 4) / 2, "the length byte is the body's")
+		end
+	},
+	{
+		name = "sysinfo: peer_ie_hex() adds UniFi's element after ours when given a sysid",
+		fn = function()
+			local ours = "dd0d026f556f55460100005e005320"
+			assert_eq(sysinfo.peer_ie_hex("00:00:5e:00:53:20", "a652"),
+				ours .. "dd1300156d00010100010252a6810600005e005320", "both elements, ours first")
+			assert_eq(sysinfo.peer_ie_hex("00:00:5e:00:53:20"), ours, "no sysid: ours alone, as before")
+			assert_eq(sysinfo.peer_ie_hex("00:00:5e:00:53:20", "bad"), ours, "a bad sysid: ours alone")
+		end
+	},
+	{
 		name = "sysinfo: scan_table() decodes iw's \\xNN SSID escapes",
 		fn = function()
 			-- iw escapes every byte that is not printable ASCII. A hotspot
