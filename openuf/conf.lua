@@ -239,6 +239,16 @@ config = {
 	-- channel with its own backhaul) or where the parent sits on DFS channels.
 	uplink_radio_aps = true,
 
+	-- Follow the controller's Band Steering and Roaming Assistant on THIS AP.
+	-- Both run through usteer, and usteer rewrites every 802.11k neighbour
+	-- list once a second with the APs that run usteer only, so a client is
+	-- never told about a genuine UniFi AP (nrlist.lua's header). The two are
+	-- site-wide WLAN settings in the controller; false turns them off here
+	-- alone: usteer stops, openUF keeps the neighbour lists, and the other
+	-- APs go on steering. The controller still shows both as on for this AP.
+	-- Changing it asks the controller for a fresh push, which applies it.
+	controller_steering = true,
+
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->
 	-- Device Authentication). true creates the site's device login on this
 	-- AP with the password the controller pushes (as a hash), and removes it

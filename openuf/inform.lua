@@ -4244,6 +4244,35 @@ function M._steering_flags(vap_table, sys_raw)
 	return steering_active, roam_assist_active
 end
 
+-- conf.lua `controller_steering = false`: this AP alone does not run usteer
+-- for the controller's Band Steering and Roaming Assistant. Returns what
+-- usteer.set_enabled gets. Only the vaps' Roaming Assistant flag goes too:
+-- without usteer roamassist.lua can see no other AP and would log "usteer not
+-- answering" every restart, so the WLANs get no roam-assist stamp. 802.11k/v,
+-- which steering forces on, are apply_config's and stay as pushed.
+-- _steering_why keeps what the controller asked, which the portal shows.
+function M._local_steering_gate(vap_table, cfg, steering_active, roam_assist_active)
+	if not (cfg and cfg.config and cfg.config.controller_steering == false) then
+		return steering_active, roam_assist_active
+	end
+	for _, vap in ipairs(vap_table or {}) do vap.roam_assist_enabled = false end
+	return false, false
+end
+
+-- The gate above only acts on a push, and a restart with an unchanged
+-- cfgversion gets none (`noop`): flipping the option would leave usteer as it
+-- was until the controller next changed something. Forget cfgversion when the
+-- option differs from the one the last push was applied with, as
+-- _reconcile_plugins does for the plugin set.
+function M._reconcile_local_steering(st, cfg)
+	local want = (cfg and cfg.config and cfg.config.controller_steering == false) and "off" or "on"
+	if (st.steering_local or "on") == want then return false end
+	if st.adopted and st.cfgversion ~= "" then st.cfgversion = "" end
+	st.steering_local = want
+	M._state.save(st)
+	return true
+end
+
 -- Parse the `switch.*` block: per-port VLAN assignment.
 --
 -- Wire shape, fully mapped live 2026-07-19 by diffing system_cfg across five
@@ -4934,7 +4963,12 @@ function M.handle_response(json_str, st, cfg)
 				if #radio_table > 0 or #vap_table > 0 then
 					local steering_active, roam_assist_active =
 						M._steering_flags(vap_table, sys_raw)
-					M._usteer.set_enabled(steering_active, cfg, roam_assist_active)
+					-- controller_steering = false stops usteer here and nothing
+					-- else: apply_config still gets the controller's flags, so
+					-- the 802.11k/v they force on stay on.
+					local run_bs, run_ra = M._local_steering_gate(vap_table, cfg,
+						steering_active, roam_assist_active)
+					M._usteer.set_enabled(run_bs, cfg, run_ra)
 					M._usteer_filter_next = 0   -- re-check the sync filter next tick
 					if M._backhaul and M._backhaul.pin_parent_channel then
 						pcall(M._backhaul.pin_parent_channel, radio_table, st, ufuci)
@@ -8771,6 +8805,7 @@ function M.run(cfg, ufhw)
 	end
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	M._reconcile_plugins(st, cfg)
+	M._reconcile_local_steering(st, cfg)
 	M._migrate_legacy_rrb(st, cfg)
 	-- Blocked-client nft rules are live kernel state, not persisted UCI --
 	-- reapply from state.json on every fresh start (mirrors the bootstrap
