@@ -150,6 +150,13 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   a stock image fits. The first profile to present a **WiFi 5 identity** — `ufmodel/uhdiw.lua`,
   the UAP-IW-HD, five sockets like the board — which no controller has adopted under yet; the
   header says how to fall back to `u6iw`
+- **MikroTik hAP ac (RB962UiGS-5HacT2HnT)** (dual-band 802.11n/ac, QCA9558 + QCA9880, ath79,
+  swconfig) — use `modelmap/mikrotik-hap-ac.lua`. Run on one unit as a mesh child, adopted.
+  **Its ethernet MACs are random on every boot** (RouterBoot keeps the MAC where `ag71xx` cannot
+  read it): the map reads the identity from RouterBoot's `hard_config` (`identity_mac_file`), so
+  it is the label MAC on every boot with nothing to pin. The generic map is wrong here: its
+  `eth1` is the SFP cage.
+  ⚠️ The order of ether2–ether5 on switch ports 2–5 is assumed, not measured
 - **TP-Link Deco M5 v1 / v2 / v3** (dual-band 802.11ac Wave 2, 2x2, IPQ4019 / ipq40xx, DSA) — use
   `modelmap/deco-m5.lua`, **one profile for all three revisions**: OpenWrt builds them from one
   `.dtsi` with the same two sockets (the DSA netdevs `wan` and `lan`) and the same radios; they

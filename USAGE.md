@@ -467,6 +467,10 @@ dev = dofile("modelmap/tl-wr1043ndv2.lua")
 -- presents as a UAP-IW-HD -- see "Device identity" below):
 dev = dofile("modelmap/archer-a7-v5.lua")
 
+-- For MikroTik hAP ac (RB962UiGS-5HacT2HnT, ath79 swconfig; the ethernet MACs are random
+-- on every boot, so the map takes the identity from RouterBoot's hard_config):
+dev = dofile("modelmap/mikrotik-hap-ac.lua")
+
 -- For TP-Link Deco M5 v1 / v2 / v3 (IPQ4019 / ipq40xx — a DSA board; one map for all three,
 -- presents as a UAP-AC-HD -- see "Device identity" below):
 dev = dofile("modelmap/deco-m5.lua")

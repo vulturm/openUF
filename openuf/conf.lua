@@ -15,6 +15,7 @@
 	  tl-wdr3500-v1.lua                  TP-Link TL-WDR3500 v1  (swconfig, 2-band)
 	  tl-wr1043ndv2.lua                  TP-Link WR1043ND v2    (swconfig, 1-band)
 	  archer-a7-v5.lua                   TP-Link Archer A7 v5 / C7 v4 / C7 v5 (swconfig, 2-band; ⚠️ unverified)
+	  mikrotik-hap-ac.lua                MikroTik hAP ac RB962UiGS (swconfig, 2-band; random eth MACs, see header)
 	  deco-m5.lua                        TP-Link Deco M5 v1 / v2 / v3 (DSA, 2-band, 2 sockets; ⚠️ unverified)
 	  deco-m4r-v1.lua                    TP-Link Deco M4R v1 / v2 (swconfig, 2-band, 2 sockets, no WAN role; ⚠️ unverified)
 	  deco-m4r-v4.lua                    TP-Link Deco M4R v4 (DSA, 2-band, 2 sockets named eth0/eth1; ⚠️ unverified)
