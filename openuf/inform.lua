@@ -7347,14 +7347,17 @@ end
 -- follows the command carries the result. A refused sweep still leaves the
 -- operating channel's survey, so the table is built either way (_force_scan
 -- has logged the refusal). Returns how many radios were swept.
-function M._spectrum_scan(cfg, band, who)
+function M._spectrum_scan(cfg, band, who, skip_radio)
 	local ufuci = M._ucihelper
 	if not (ufuci and ufuci.get_radio_table and ufuci.get_ifname_for_radio) then return 0 end
 	local ok_r, radios = pcall(ufuci.get_radio_table, cfg and cfg.uap and cfg.uap.hwassign)
 	if not ok_r or type(radios) ~= "table" then return 0 end
 	local queued = 0
 	for _, radio in ipairs(radios) do
-		if band == nil or radio.radio == band then
+		if skip_radio and radio.name == skip_radio then
+			io.stderr:write(("inform: %s: %s left out, it carries the wireless uplink\n")
+				:format(tostring(who), tostring(radio.name)))
+		elseif band == nil or radio.radio == band then
 			local ok_if, ifname = pcall(ufuci.get_ifname_for_radio, radio.name)
 			if ok_if and ifname then
 				-- One job per radio. The same kind of sweep asked again while
@@ -7483,8 +7486,20 @@ end
 -- uses), queued in chunks like every other sweep (M._scan_jobs): the
 -- `scan dump` fills in over the following heartbeats instead of all at once
 -- after three seconds of radio silence. Returns how many radios were queued.
-function M._scan_all_radios(cfg)
-	return M._spectrum_scan(cfg, nil, "11k-scan")
+-- The automatic sweeps (the interval and the controller's nightly request)
+-- leave out the radio a wireless uplink rides: one PHY is on one channel, so
+-- an off-channel step takes the station with it, and on a mesh child every
+-- client's traffic, 2.4 GHz included, leaves through that station. The
+-- radio's own channel is still heard passively, and that is the parent's.
+-- A scan the controller is ASKED for (Quick Scan, Spectrum Scan) still
+-- sweeps everything, as a UniFi AP's does.
+function M._scan_all_radios(cfg, st)
+	local skip = nil
+	if M._backhaul and M._backhaul.uplink_radio then
+		local ok_u, r = pcall(M._backhaul.uplink_radio, st, M._ucihelper)
+		if ok_u then skip = r end
+	end
+	return M._spectrum_scan(cfg, nil, "11k-scan", skip)
 end
 
 -- True when one of the pending 11k-scan due times has come. The times that
@@ -7521,7 +7536,7 @@ function M._scan_requested()
 	return due
 end
 
-function M._maybe_scan_neighbours(cfg, ctx)
+function M._maybe_scan_neighbours(cfg, ctx, st)
 	-- A sweep still in its chunks is never started over, and a due time is
 	-- left in the file until it can run: the second of the hour's two scans
 	-- lands while the first is still sweeping on a two-radio board.
@@ -7531,7 +7546,7 @@ function M._maybe_scan_neighbours(cfg, ctx)
 	if M._scan_requested() then
 		io.stderr:write("inform: 11k-scan requested -- scanning every radio\n")
 		ctx.last_scan = M._time()
-		return M._scan_all_radios(cfg) > 0
+		return M._scan_all_radios(cfg, st) > 0
 	end
 	local every = tonumber(cfg and cfg.config and cfg.config.neighbour_scan_interval)
 	if not every or every <= 0 then return false end
@@ -7544,7 +7559,7 @@ function M._maybe_scan_neighbours(cfg, ctx)
 	-- the start of one sweep to the start of the next, and a sweep takes
 	-- ~11 heartbeats across two radios.)
 	ctx.last_scan = now
-	return M._scan_all_radios(cfg) > 0
+	return M._scan_all_radios(cfg, st) > 0
 end
 
 -- ─── 802.11r key-exchange socket (rrbguard.lua) ─────────────────────────────
@@ -8457,7 +8472,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	-- The STUN client: a Binding Request every stun.INTERVAL, before the
 	-- inform so the reply's mapped address rides out on it.
 	pcall(M._stun_tick, st)
-	M._maybe_scan_neighbours(cfg, ctx)
+	M._maybe_scan_neighbours(cfg, ctx, st)
 	-- The controller's nightly dfs-reset (syswrapper.sh dfs-reset), the same
 	-- request-file handshake as the 11k scan above.
 	pcall(M._maybe_service_dfs_reset, cfg, st)
