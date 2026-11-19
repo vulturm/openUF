@@ -8,6 +8,7 @@
 			"ubus": {
 				"luci.openuf": [
 					"getStatus",
+					"getRoaming",
 					"listPresets",
 					"discover",
 					"exportPreset",

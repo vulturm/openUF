@@ -135,7 +135,91 @@ function public_status() {
 	return public_cache;
 }
 
+function ubus_json(path, method) {
+	const r = run('ubus call ' + path + ' ' + method);
+	if (r.code != 0)
+		return null;
+	let doc = null;
+	try {
+		doc = json(r.output);
+	}
+	catch (e) {
+		doc = null;
+	}
+	return (type(doc) == 'object') ? doc : null;
+}
+
+// What a client is told about where else it can go, per BSS, read from
+// hostapd itself rather than from openUF's intent: where usteer runs it owns
+// the 802.11k list (it rewrites it every second, nrlist.lua's header), and
+// the page has to say whose list a client is actually getting. usteer leaves
+// the BSS's own entry out of what it sets and openUF puts it first, so
+// "neighbours" counts the entries that are not this BSS either way.
+function hex_byte(h) {
+	const n = int(h, 16);
+	return (type(n) == 'int' && n > 0) ? n : null;
+}
+
+function roaming_state() {
+	const fd = popen("ubus list 'hostapd.*' 2>/dev/null", 'r');
+	const objs = fd ? split(trim(fd.read('all') || ''), '\n') : [];
+	if (fd)
+		fd.close();
+	// Two passes: an entry naming one of THIS device's BSSes (the other band)
+	// is told apart from another access point.
+	const seen = [], mine = {};
+	for (let obj in objs) {
+		if (!match(obj, /^hostapd\.[A-Za-z0-9_.-]+$/))
+			continue;
+		const st = ubus_json(obj, 'get_status') || {};
+		const nr = ubus_json(obj, 'rrm_nr_list');
+		if (st.bssid)
+			mine[lc(st.bssid)] = true;
+		push(seen, { obj: obj, st: st, list: (nr && type(nr.list) == 'array') ? nr.list : null });
+	}
+	const bss = [];
+	for (let s in seen) {
+		const st = s.st, own = lc(st.bssid || '');
+		const nbrs = [];
+		for (let e in (s.list || [])) {
+			if (type(e) != 'array' || lc(e[0] || '') == own)
+				continue;
+			// The element: BSSID (6), BSSID information (4), operating
+			// class (1), channel (1), PHY type (1): byte 11 is the channel.
+			const hex = e[2] || '';
+			const ch = length(hex) >= 24 ? hex_byte(substr(hex, 22, 2)) : null;
+			push(nbrs, { bssid: lc(e[0] || ''), ssid: e[1], channel: ch, self: mine[lc(e[0] || '')] ? true : false });
+		}
+		push(bss, {
+			ifname: substr(s.obj, 8),
+			ssid: st.ssid,
+			freq: st.freq,
+			channel: st.channel,
+			// No list at all is a BSS with 802.11k off (rrm_nr_list fails).
+			rrm: s.list != null,
+			neighbours: length(nbrs),
+			list: nbrs,
+			nr_requests: st.rrm ? st.rrm.neighbor_report_tx : null,
+			btm_queries: st.wnm ? st.wnm.bss_transition_query_rx : null,
+			btm_requests: st.wnm ? st.wnm.bss_transition_request_tx : null
+		});
+	}
+	return {
+		// pidof, not `pgrep -x`: busybox's -x matches the whole command line
+		// (/sbin/usteerd), so it reported a running usteer as stopped.
+		usteer: shell_ok('pidof usteerd'),
+		rrb_unifi: access('/etc/openuf/plugins/rrb-unifi.lua') ? true : false,
+		bss: bss
+	};
+}
+
 const methods = {
+	getRoaming: {
+		call: function() {
+			return roaming_state();
+		}
+	},
+
 	getPublic: {
 		call: function() {
 			return public_status();
