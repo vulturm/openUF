@@ -492,11 +492,13 @@
 			if (!b.rrm) parts.push('802.11k off');
 			else {
 				parts.push(b.neighbours === 1 ? '1 neighbour' : b.neighbours + ' neighbours');
-				if (b.nr_requests != null) parts.push(b.nr_requests + ' asked');
+				if (b.nr_requests != null) parts.push('sent to clients ' + b.nr_requests + '×');
 				if (b.btm_requests) parts.push(b.btm_requests + ' moved');
 			}
+			// hostapd's counters, reset with the BSS: "sent" is neighbor_report_tx
+			// (a client asked for the list), "moved" bss_transition_request_tx.
 			const line = row(b.ssid || b.ifname, [BAND(b.freq), b.channel ? 'channel ' + b.channel : null, b.ifname].filter(Boolean).join(' · '),
-				h('span', { class: 'value' }, parts.join(' · ')), { inline: true });
+				h('span', { class: 'value', title: 'How many times a client asked this network for its neighbour list, since Wi-Fi last restarted. Clients usually ask when their signal drops and they look for a better access point.' }, parts.join(' · ')), { inline: true });
 			// What a client asking this BSS is told, entry by entry: the quickest
 			// way to see a missing access point, without SSH.
 			if (b.list && b.list.length)
@@ -575,7 +577,7 @@
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Radio environment'),
 			row('Ask clients to scan', 'Have one capable client at a time report the networks it hears. The access point never leaves its channel; the client does, for about a second.', toggle('rrm_enrichment', '1', ro), { inline: true }),
-			row('Scan for neighbouring networks', 'The access point scans a few channels at a time, under half a second off the air each, so the controller\'s Environment view stays filled.',
+			row('Scan for neighbouring networks', 'The access point scans a few channels at a time, under half a second off the air each, so the controller\'s Environment view and the neighbour lists see other channels. On a wireless (mesh) uplink the radio carrying it is never scanned, so the uplink is not interrupted.',
 				select('neighbour_scan_interval', '0', scanSteps, ro))
 		));
 
