@@ -1041,7 +1041,7 @@ local OFDM_RATES = {6000, 9000, 12000, 18000, 24000, 36000, 48000, 54000}
 -- WLANs. hostapd's basic rates are the radio's, while the controller sets a
 -- floor per WLAN; each WLAN's own floor is then a per-netdev TX mask
 -- (rate_mask_for), and the kernel refuses a mask holding none of the radio's
--- basic rates (-EINVAL on ath9k and ath10k, a hAP ac, 2026-11-19). So:
+-- basic rates (-EINVAL on ath9k and ath10k, a hAP ac). So:
 --   OFDM floor: the highest of 6/12/24 at or under it -- the rates every
 --   OFDM station must implement, so no WLAN's client is shut out -- plus 24
 --   under 24, which is what a genuine U7 advertised with a 12 Mbps floor

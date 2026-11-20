@@ -4269,7 +4269,7 @@ end
 -- local option that only acts inside apply_config is applied by running that
 -- push again, here, instead of waiting for the controller. Forgetting
 -- cfgversion asks the controller for one, but it answered `noop` for minutes
--- on end (2026-11-19, a hAP ac, after a few pushes that hour). It holds the
+-- on end (a hAP ac, after a few pushes that hour). It holds the
 -- WLAN keys, as state.json holds the authkey: owner-only from the empty file
 -- on, before the body is written.
 M.LAST_PUSH_FILE = "/tmp/openuf-last-push.json"
