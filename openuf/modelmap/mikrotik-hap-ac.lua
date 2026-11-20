@@ -26,6 +26,27 @@
 	mac_base, eth0.1 and br-lan held one MAC while eth0 and eth1 held random
 	ones (addr_assign_type 1).
 
+	Radios, measured on the same unit (`iw phy`, hostapd), all
+	read at runtime by openUF -- listed because they explain what the device
+	does, not because anything here sets them:
+	  • 5 GHz QCA9880 (ath10k): 3x3, VHT80 at most ("neither 160 nor 80+80"),
+	    and NO beamforming in either direction and no MU-MIMO. A Wi-Fi 6/7
+	    parent cannot beamform toward it, so a mesh hop runs on raw signal
+	    (-64 dBm to a U7 parent: VHT-MCS 3, two streams, ~200 Mbps).
+	  • 2.4 GHz QCA9558 (ath9k): 3x3 HT. HT40 is refused by hostapd's 20/40
+	    coexistence scan wherever neighbours sit in the band -- the site, not
+	    the board.
+	  • Neither driver can set a beacon rate (ucihelper's phy_caps leaves
+	    beacon_rate out); both accept a per-BSS TX bitrate mask, which is what
+	    carries each WLAN's own Minimum Data Rate.
+	  • The unit's EEPROM pins both radios to regulatory domain US (`iw reg
+	    get`: phy#0 and phy#1 "country US: DFS-FCC" under a global HK), and the
+	    build has no ATH_USER_REGD: country_override changes UCI and the
+	    beacons, not the channels or power (/tmp/openuf-status regd_mismatch).
+	    Another unit may carry another domain.
+	Space: 16 MB NOR, 8.3 MB overlay; with the openuf + luci-app-openuf
+	packages, LuCI and rrb-unifi, 3.2 MB stayed free. 128 MB RAM.
+
 	⚠️ The order of ether2..ether5 on switch ports 2..5 is not stated anywhere
 	in the source (board.d gives them no label numbers, and 01_leds has no
 	entry for this board). See dev.conf.vlan below.
