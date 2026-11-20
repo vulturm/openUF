@@ -1403,13 +1403,33 @@ return {
 					assert_eq(ucihelper.apply_rate_masks(), 0, "nothing again while the netdevs stand")
 					idx = "9"
 					assert_eq(ucihelper.apply_rate_masks(), 2, "a reload recreated them: applied again")
+					-- A refused mask (a BSS still in its DFS check) is retried
+					-- after MASK_RETRY, not cached as final.
+					local now = 1000
+					ucihelper._now = function() return now end
+					local orig_run = ucihelper._run_cmd
+					local refuse = true
+					ucihelper._run_cmd = function(cmd)
+						cmds[#cmds + 1] = cmd
+						if cmd:match("phy0%-ap0 set bitrates legacy") and refuse then return 234 end
+						return 0
+					end
+					idx = "11"
+					assert_eq(ucihelper.apply_rate_masks(), 1, "the other WLAN applied, this one refused")
+					now = 1010
+					assert_eq(ucihelper.apply_rate_masks(), 0, "not hammered every heartbeat")
+					refuse = false
+					now = 1031
+					assert_eq(ucihelper.apply_rate_masks(), 1, "retried after MASK_RETRY, and accepted")
+					assert_eq(ucihelper.apply_rate_masks(), 0, "then settled")
+					ucihelper._run_cmd, ucihelper._now = orig_run, os.time
 					c:delete("wireless", "g1", "openuf_minrate")
 					local before = #cmds
 					ucihelper.apply_rate_masks()
 					assert_contains(table.concat(cmds, "\n", before + 1), "iw dev phy0-ap1 set bitrates >", "the floor gone: mask cleared")
 				end)
 				ucihelper.ifname_for_section, io.open = orig_ifs, orig_open
-				ucihelper._masks = {}
+				ucihelper._masks, ucihelper._mask_failed = {}, {}
 				if not ok then error(err, 0) end
 			end)
 		end

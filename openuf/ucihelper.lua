@@ -3794,6 +3794,13 @@ end
 -- heartbeat; costs one ubus call and a sysfs read per stamped WLAN.
 -- Returns how many masks were (re)applied.
 M._masks = {}   -- ifname -> "ifindex|rates" last applied
+-- A refused mask is tried again after MASK_RETRY: a BSS still in its DFS
+-- channel availability check refuses one (-EINVAL), and caching the refusal
+-- as final left eG's 5 GHz BSS on a hAP ac without its floor once the CAC
+-- ended a minute later. The refusal is logged once per key, not per retry.
+M._mask_failed = {}   -- ifname -> {key = ..., at = epoch}
+M.MASK_RETRY = 30
+M._now = os.time
 function M.apply_rate_masks()
 	local uci = get_uci()
 	local cursor = uci.cursor()
@@ -3822,18 +3829,24 @@ function M.apply_rate_masks()
 		local idx = f and f:read("*l")
 		if f then f:close() end
 		local key = tostring(idx) .. "|" .. w.list
-		if M._masks[ifname] ~= key then
+		local failed = M._mask_failed[ifname]
+		local wait = failed and failed.key == key and M._now() - failed.at < M.MASK_RETRY
+		if M._masks[ifname] ~= key and not wait then
 			local kind = (w.band == "2g") and "legacy-2.4" or "legacy-5"
 			local rc = M._run_cmd("iw dev " .. ifname .. " set bitrates " .. kind .. " " .. w.list .. " >/dev/null 2>&1")
 			if rc == 0 or rc == true then
 				M._masks[ifname] = key
+				M._mask_failed[ifname] = nil
 				n = n + 1
 				-- Once per netdev: there is no way to read a mask back.
 				io.stderr:write(("openuf: %s: Minimum Data Rate %s %s\n"):format(ifname, kind, w.list))
 			else
-				io.stderr:write(("openuf: %s: the kernel refused the rate mask %s %s -- "
-					.. "this WLAN keeps the radio's rates\n"):format(ifname, kind, w.list))
-				M._masks[ifname] = key   -- once per netdev, not every heartbeat
+				if not (failed and failed.key == key) then
+					io.stderr:write(("openuf: %s: the kernel refused the rate mask %s %s -- "
+						.. "tried again every %d s (a DFS check in progress refuses it)\n")
+						:format(ifname, kind, w.list, M.MASK_RETRY))
+				end
+				M._mask_failed[ifname] = {key = key, at = M._now()}
 			end
 		end
 	end
@@ -3843,6 +3856,9 @@ function M.apply_rate_masks()
 			M._run_cmd("iw dev " .. ifname .. " set bitrates >/dev/null 2>&1")
 			M._masks[ifname] = nil
 		end
+	end
+	for ifname in pairs(M._mask_failed) do
+		if not want[ifname] then M._mask_failed[ifname] = nil end
 	end
 	return n
 end
