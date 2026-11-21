@@ -94,9 +94,12 @@ return {
 			with_files({[ftpeer.ENABLED] = "rrb-unifi\n"}, function()
 				local c = cursor({U7G .. ",b29c6cb8ab7f"})
 				local changed = ftpeer.tick(c, {[U7G] = {ssid = "AP-guest", at = NOW}}, {}, NOW)
-				assert_false(changed, "already the list it would write")
+				assert_true(changed, "the same list, but now cut per SSID: rewrite the WLANs")
+				assert_eq(c.commits, 0, "the list itself is not rewritten")
+				assert_false(ftpeer.tick(c, {[U7G] = {ssid = "AP-guest", at = NOW + 60}}, {}, NOW + 60),
+					"nothing new: nothing to do")
 				assert_false(ftpeer.tick(c, {}, {}, NOW + ftpeer.KEEP - 10), "kept as a learned peer")
-				assert_true(ftpeer.tick(c, {}, {}, NOW + ftpeer.KEEP + 1), "and aged out like one")
+				assert_true(ftpeer.tick(c, {}, {}, NOW + 60 + ftpeer.KEEP + 1), "and aged out like one")
 			end)
 		end
 	},

@@ -100,14 +100,15 @@ end
 -- Returns the new map, whether it differs from `map` enough to be written
 -- (a peer came, went or changed SSID, or its time moved REFRESH), and the
 -- peers that went: their entries leave the list, which would otherwise keep
--- them as hand-written ones.
+-- them as hand-written ones. The fourth value: a peer came, went or changed
+-- SSID, which changes what filter() leaves on a WLAN.
 function M.merge(map, seen, ssids, own, now)
-	local out, dirty, gone = {}, false, {}
+	local out, dirty, gone, moved = {}, false, {}, false
 	for b, e in pairs(map or {}) do
 		if now - e.at <= M.KEEP and not own[b] then
 			out[b] = {ssid = e.ssid, at = e.at}
 		else
-			dirty, gone[b] = true, true
+			dirty, gone[b], moved = true, true, true
 		end
 	end
 	for b, e in pairs(seen or {}) do
@@ -116,14 +117,14 @@ function M.merge(map, seen, ssids, own, now)
 				and tonumber(e.at) and now - e.at <= M.KEEP then
 			local cur = out[b]
 			if not cur or cur.ssid ~= e.ssid then
-				out[b], dirty, gone[b] = {ssid = e.ssid, at = e.at}, true, nil
+				out[b], dirty, gone[b], moved = {ssid = e.ssid, at = e.at}, true, nil, true
 			elseif e.at > cur.at then
 				if e.at - cur.at >= M.REFRESH then dirty = true end
 				cur.at = e.at
 			end
 		end
 	end
-	return out, dirty, gone
+	return out, dirty, gone, moved
 end
 
 -- The ft_peer list for `map`: one entry per peer, plus every entry of
@@ -165,18 +166,19 @@ end
 M._map = nil
 
 -- One pass: refresh the peers from `seen`, write the store when it moved,
--- and rrb-unifi's ft_peer when the list changed. Returns true when the list
--- changed (the WLANs need their 802.11r block rewritten), and the list.
+-- and rrb-unifi's ft_peer when the list changed. Returns true when the
+-- WLANs need their 802.11r block rewritten -- the list changed, or a peer's
+-- SSID did, which moves it between WLANs -- and the list.
 function M.tick(cursor, seen, own, now)
 	if not M.plugin_enabled() then return false end
 	if not (cursor and cursor.get and cursor.set) then return false end
 	M._map = M._map or M.load()
-	local map, dirty, gone = M.merge(M._map, seen, M.ft_ssids(cursor), own or {}, now)
+	local map, dirty, gone, moved = M.merge(M._map, seen, M.ft_ssids(cursor), own or {}, now)
 	M._map = map
 	if dirty then M.save(map) end
 	local current = as_list(cursor:get(M.RRB, "main", "ft_peer"))
 	local want = M.list_for(map, current, gone)
-	if same(current, want) then return false, want end
+	if same(current, want) then return moved, want end
 	if not cursor:get(M.RRB, "main") then cursor:set(M.RRB, "main", "rrb") end
 	if #want > 0 then
 		cursor:set(M.RRB, "main", "ft_peer", want)
