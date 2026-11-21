@@ -200,7 +200,6 @@ function roaming_state() {
 			neighbours: length(nbrs),
 			list: nbrs,
 			nr_requests: st.rrm ? st.rrm.neighbor_report_tx : null,
-			btm_queries: st.wnm ? st.wnm.bss_transition_query_rx : null,
 			btm_requests: st.wnm ? st.wnm.bss_transition_request_tx : null
 		});
 	}
