@@ -144,7 +144,15 @@ return {
 			-- `add`, never `update`: update refreshes the element and the
 			-- first-seen time would be lost.
 			assert_false(s:find("update @", 1, true) ~= nil, "no update")
-			assert_false(s:find("meta ", 1, true) ~= nil, "no nft_meta_bridge dependency (see bcfilter.lua)")
+			-- `meta l4proto` is nft_meta proper, which `udp dport` already
+			-- implies; the bridge keys (ibrname, pkttype) need nft_meta_bridge.
+			assert_false(s:gsub("meta l4proto", ""):find("meta ", 1, true) ~= nil,
+				"no nft_meta_bridge dependency (see bcfilter.lua)")
+			-- The forward hook sees every bridged frame: UDP leaves for its own
+			-- chain, and ip_seen is written only for a MAC it does not hold.
+			assert_true(s:find("meta l4proto udp jump track_udp", 1, true) ~= nil, "UDP in its own chain")
+			assert_true(s:find("ether saddr != @ip_seen ip saddr != 0.0.0.0 add @ip_seen", 1, true) ~= nil,
+				"no set write per packet for a known MAC")
 			assert_true(s:find("hook forward", 1, true) ~= nil, "forward hook")
 		end
 	},
@@ -348,9 +356,27 @@ return {
 			local ok2 = at.ensure_table()
 			at._exec, at._popen = o, op
 			assert_true(ok1, "present")
-			assert_eq(before, 1, "present: only listed, never rebuilt (that would empty the sets)")
+			assert_eq(before, 2, "present: table and UDP chain listed, never rebuilt (that would empty the sets)")
 			assert_true(ok2, "installed")
 			assert_true(cmds[#cmds]:find("^nft %-f ") ~= nil, "missing: loaded from a script")
+		end
+	},
+	{
+		name = "assoctrack: ensure_table rebuilds a table from before the UDP chain, once",
+		fn = function()
+			local o, op = at._exec, at._popen
+			local cmds = {}
+			at._shape_checked = nil
+			at._exec = function(cmd)
+				cmds[#cmds + 1] = cmd
+				if cmd:find("track_udp", 1, true) then return 1 end   -- the chain is not there
+				return 0
+			end
+			at._popen = function() return "\t\ttype ether_addr\n\t\tsize 4096\n" end
+			local ok = at.ensure_table()
+			at._exec, at._popen = o, op
+			assert_true(ok, "rebuilt")
+			assert_true(cmds[#cmds]:find("^nft %-f ") ~= nil, "a set write per packet is not kept: loaded anew")
 		end
 	},
 	{

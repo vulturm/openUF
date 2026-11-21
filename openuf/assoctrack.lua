@@ -83,21 +83,33 @@ function M.nft_script()
 			"  set %s { type ether_addr; flags dynamic,timeout; timeout %ds; size %d; counter; }",
 			s, t, M.SET_SIZE)
 	end
-	local rules = {
+	-- Every bridged frame crosses this chain, a speed test's included, so the
+	-- bulk of them must leave after as little as possible: UDP goes to its
+	-- own chain (DHCP and DNS are UDP), and ip_seen is only written for a MAC
+	-- it does not hold yet -- `add` never refreshes an element anyway, and
+	-- its packet counter was read for nothing, so the result is the same
+	-- first-seen time without a set write per packet.
+	local udp_rules = {
 		-- Client -> server: the station asked for a lease.
 		"udp sport 68 udp dport 67 add @dhcp_req { ether saddr }",
 		-- Server -> client, unicast to the station's MAC: the usual ACK
 		-- (dnsmasq and the UniFi gateway unicast unless the client sets the
 		-- broadcast flag).
 		"udp sport 67 udp dport 68 add @dhcp_ack { ether daddr }",
+		"udp dport 53 add @dns_q { ether saddr }",
+		"udp sport 53 add @dns_resp { ether daddr }",
+	}
+	local rules = {
+		"meta l4proto udp jump track_udp",
+		"tcp dport 53 add @dns_q { ether saddr }",
+		"tcp sport 53 add @dns_resp { ether daddr }",
 		-- The station's first frame from a real source address: the lease
 		-- is in use. Covers the broadcast-ACK case above cannot see.
-		"ip saddr != 0.0.0.0 add @ip_seen { ether saddr }",
-		"udp dport 53 add @dns_q { ether saddr }",
-		"tcp dport 53 add @dns_q { ether saddr }",
-		"udp sport 53 add @dns_resp { ether daddr }",
-		"tcp sport 53 add @dns_resp { ether daddr }",
+		"ether saddr != @ip_seen ip saddr != 0.0.0.0 add @ip_seen { ether saddr }",
 	}
+	lines[#lines + 1] = "  chain track_udp {"
+	for _, r in ipairs(udp_rules) do lines[#lines + 1] = "    " .. r end
+	lines[#lines + 1] = "  }"
 	lines[#lines + 1] = "  chain track {"
 	lines[#lines + 1] = "    type filter hook forward priority filter + 10; policy accept;"
 	for _, r in ipairs(rules) do lines[#lines + 1] = "    " .. r end
@@ -113,15 +125,19 @@ M.SCRIPT_PATH = "/tmp/openuf-assoc.nft"
 -- connection in flight.
 --
 -- The exception: a table an older openUF left behind (an upgrade without a
--- reboot) keeps that version's set shape -- before SET_SIZE, the kernel's
--- default 65535. Its shape is checked once per process, so that rebuild
--- empties the sets at most once, at startup.
+-- reboot) keeps that version's shape -- before SET_SIZE, the kernel's
+-- default 65535; before the UDP chain, a set write per bridged packet. Its
+-- shape is checked once per process, so that rebuild empties the sets at
+-- most once, at startup.
 function M.ensure_table()
 	if exec_ok(M._exec("nft list table " .. M.NFT_TABLE .. " >/dev/null 2>&1")) then
 		if M._shape_checked then return true end
 		M._shape_checked = true
 		local set = M._popen("nft list set " .. M.NFT_TABLE .. " " .. M.SETS[1] .. " 2>/dev/null") or ""
-		if set:find("size " .. M.SET_SIZE, 1, true) then return true end
+		if set:find("size " .. M.SET_SIZE, 1, true)
+			and exec_ok(M._exec("nft list chain " .. M.NFT_TABLE .. " track_udp >/dev/null 2>&1")) then
+			return true
+		end
 	end
 	M._shape_checked = true
 	local f = io.open(M.SCRIPT_PATH, "w")

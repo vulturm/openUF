@@ -42,9 +42,11 @@ local NFT_TABLE = "bridge openuf"
 local is_mac = util.is_mac
 
 -- Rebuild the nftables blocklist to exactly match blocked_macs (a list of
--- MAC address strings). Safe to call with an empty list (leaves an empty,
--- harmless table+set+chain in place) and safe to call repeatedly (each call
--- fully replaces the previous state rather than accumulating).
+-- MAC address strings). Safe to call repeatedly (each call fully replaces
+-- the previous state rather than accumulating). With nothing blocked the
+-- table goes: its two base chains matched every bridged frame against an
+-- empty set, on the forward and input hooks, for nothing. Every block and
+-- unblock comes through here, so the next block builds it again.
 function M.reconcile(blocked_macs)
 	local T = NFT_TABLE
 	local stmts = {"add set " .. T .. " blocked_macs { type ether_addr; }"}
@@ -54,6 +56,10 @@ function M.reconcile(blocked_macs)
 		else
 			io.stderr:write(("firewall: ignoring malformed blocked MAC %q\n"):format(tostring(mac)))
 		end
+	end
+	if #stmts == 1 then
+		util.nft_apply(T, nil, M._exec)
+		return true
 	end
 	stmts[#stmts + 1] = "add chain " .. T .. " block { type filter hook forward priority 0; }"
 	stmts[#stmts + 1] = "add rule " .. T .. " block ether saddr @blocked_macs drop"

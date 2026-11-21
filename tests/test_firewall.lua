@@ -51,7 +51,7 @@ return {
 			local exec, r = fake_nft()
 			local orig = firewall._exec
 			firewall._exec = exec
-			firewall.reconcile({})
+			firewall.reconcile({"aa:bb:cc:dd:ee:01"})
 			firewall._exec = orig
 			assert_eq(r.runs, 1, "one nft run, not one per command")
 			assert_eq(table.concat(r.cmds, "\n"), table.concat({
@@ -59,12 +59,26 @@ return {
 				"nft delete table bridge openuf",
 				"nft add table bridge openuf",
 				"nft add set bridge openuf blocked_macs { type ether_addr; }",
+				"nft add element bridge openuf blocked_macs { aa:bb:cc:dd:ee:01 }",
 				"nft add chain bridge openuf block { type filter hook forward priority 0; }",
 				"nft add rule bridge openuf block ether saddr @blocked_macs drop",
 				"nft add rule bridge openuf block ether daddr @blocked_macs drop",
 				"nft add chain bridge openuf block_in { type filter hook input priority 0; }",
 				"nft add rule bridge openuf block_in ether saddr @blocked_macs drop",
 			}, "\n"), "the old table goes in the same transaction that builds the new one")
+		end
+	},
+	{
+		name = "firewall: with nothing blocked the table goes, no base chain left on the bridge hooks",
+		fn = function()
+			local exec, r = fake_nft()
+			local orig = firewall._exec
+			firewall._exec = exec
+			firewall.reconcile({})
+			firewall._exec = orig
+			local all = table.concat(r.cmds, "\n")
+			assert_true(all:find("delete table bridge openuf", 1, true) ~= nil, "the table is deleted")
+			assert_false(all:find("add chain", 1, true) ~= nil, "and no chain is built")
 		end
 	},
 	{
