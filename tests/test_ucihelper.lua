@@ -4971,7 +4971,7 @@ Wiphy phy2
 		end
 	},
 	{
-		name = "ucihelper: country_beacon collapses per-WLAN to one ieee80211d per radio",
+		name = "ucihelper: country_beacon, on or off, turns the Country IE on; no key leaves it alone",
 		fn = function()
 			with_ucihelper(function(db)
 				seed_radios({"radio0", "radio1", "radio2", "radio3"})
@@ -5010,8 +5010,9 @@ Wiphy phy2
 					"any WLAN on the radio asking for it is enough")
 				assert_eq(db.wireless.radio1.ieee80211d, "1",
 					"and the order the WLANs arrive in makes no difference")
-				assert_eq(db.wireless.radio3.ieee80211d, "0",
-					"nobody asked: written off, so the applied state is visible")
+				assert_eq(db.wireless.radio3.ieee80211d, "1",
+					"nobody asked: on anyway, as genuine firmware -- without it a"
+					.. " UniFi neighbour lists this BSS in operating class 0")
 				assert_nil(db.wireless.radio2.ieee80211d,
 					"a radio no WLAN carried the key for is left alone")
 			end)
@@ -5059,8 +5060,8 @@ Wiphy phy2
 				assert_eq(db.wireless.radio0.ieee80211d, "1",
 					"band=5g: the controller's 'off' cannot be honoured, and the"
 					.. " stale 0 is repaired")
-				assert_eq(db.wireless.radio1.ieee80211d, "0",
-					"band=2g: honoured, no 802.11h there")
+				assert_eq(db.wireless.radio1.ieee80211d, "1",
+					"band=2g: on as well")
 				assert_eq(db.wireless.radio2.ieee80211d, "1", "hwmode=11a")
 				assert_eq(db.wireless.radio3.ieee80211d, "1", "channel 36")
 				assert_eq(db.wireless.radio4.ieee80211d, "1",

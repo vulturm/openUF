@@ -1730,9 +1730,9 @@ end
 -- opts.maxsta: Load balance's per-radio client cap (openuf/loadbalance.lua),
 -- kept in the openUF-only option loadbalance_maxsta; false deletes it (off),
 -- nil leaves UCI alone.
--- opts.country_beacon: advertise the 802.11d Country IE in this radio's
--- beacons, collapsed from the per-WLAN aaa.<n>.country_beacon by apply_config.
--- nil leaves UCI alone (no WLAN on this radio carried the key).
+-- opts.country_beacon: collapsed from the per-WLAN aaa.<n>.country_beacon by
+-- apply_config; any value turns the 802.11d Country IE on (see below), nil
+-- leaves UCI alone (no WLAN on this radio carried the key).
 -- opts.acs_exclude_dfs / opts.acs_blacklist: the site's auto-channel limits
 -- from the controller (Settings -> Radios). The board policy above wins where
 -- it forbids DFS: a radio whose driver cannot run CAC stays off DFS whatever
@@ -1971,46 +1971,21 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 	elseif maxsta == false then
 		cursor:delete("wireless", radio, "loadbalance_maxsta")
 	end
-	-- 802.11d Country IE. Written as an explicit 0 rather than deleted when
-	-- off: hostapd.uc gates `ieee80211d` on its own truthiness, so 0 and
-	-- absent behave identically to hostapd, and writing it keeps the applied
-	-- state visible in UCI -- the same reason the iot flag is recorded.
-	--
-	-- No guard on a country being configured is needed: hostapd itself treats
-	-- ieee80211d=1 without country_code as fatal, but hostapd.uc's
-	-- device_country_append() returns before emitting ieee80211d at all when
-	-- no radio declares a country (read from 25.12's live generator), so the
-	-- option cannot reach hostapd unaccompanied.
-	--
-	-- **Never 0 on a 5 GHz radio.** hostapd refuses the whole interface with
-	-- "Cannot enable IEEE 802.11h without IEEE 802.11d enabled", and
-	-- `ieee80211h` is exactly what hostapd.uc emits for every radio with
-	-- hw_mode 'a' and a country (it defaults to 1 in the schema, and is
-	-- deleted only for hw_mode != 'a'). The result is not a dropped option but
-	-- `hostapd.add_iface failed`: the 5 GHz phy stays down with no SSID on the
-	-- air and nothing in UCI to explain it. Seen in production on both boards
-	-- (ath79/ath10k and filogic/mt76) at the first `wifi reload` after this
-	-- option was first written -- not at the push that wrote it, which is why
-	-- reading UCI and hostapd.conf straight after the provision looked clean.
-	-- 802.11h carries DFS and TPC, so suppressing the country IE there is not
-	-- something to trade for it; the radio keeps 802.11d and the controller's
-	-- setting is honoured on 2.4 GHz only.
+	-- 802.11d Country IE: always on where the push says anything about it,
+	-- whatever aaa.<n>.country_beacon says. Genuine firmware does the same:
+	-- a U7 with country_beacon=disabled on every WLAN still beacons
+	-- "US", table E-4, channels 1-11 on 2.4 GHz. Without the element a UniFi
+	-- AP cannot place this AP's BSS in an operating class: xan-sufra and
+	-- xan-rooms both listed it as op0 in the candidates of their BSS
+	-- Transition requests, where every UniFi neighbour had 81 or 129 -- a
+	-- candidate some clients refuse. On 5 GHz it was never optional anyway:
+	-- hostapd refuses the interface with "Cannot enable IEEE 802.11h without
+	-- IEEE 802.11d enabled" (a 5 GHz phy with no SSID on the air at the next
+	-- reload). An explicit 1, not a delete: it also repairs a radio an
+	-- earlier openUF left at 0. No guard on a country is needed: hostapd.uc
+	-- emits ieee80211d only for a radio with a country.
 	if country_beacon ~= nil then
-		local five = band_for_device({
-			band    = cursor:get("wireless", radio, "band"),
-			hwmode  = cursor:get("wireless", radio, "hwmode"),
-			channel = cursor:get("wireless", radio, "channel"),
-		}) == "na"
-		-- An explicit 1, not a delete: this also repairs a radio an earlier
-		-- openUF left at 0.
-		cursor:set("wireless", radio, "ieee80211d",
-			(country_beacon or five) and "1" or "0")
-		if five and not country_beacon and not M._warned_11d then
-			M._warned_11d = true
-			io.stderr:write("openuf: " .. tostring(radio) .. ": Country IE off is"
-				.. " not applicable on 5 GHz -- 802.11h (DFS) requires 802.11d,"
-				.. " and hostapd refuses the interface without it\n")
-		end
+		cursor:set("wireless", radio, "ieee80211d", "1")
 	end
 	-- Auto-channel narrowing (the site's Radio settings, see
 	-- _parse_wifi_system_cfg). Both land on wifi-device options that only
