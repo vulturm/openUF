@@ -48,7 +48,7 @@ return {
 		name = "bcfilter: reconcile rebuilds its own table from scratch",
 		fn = function()
 			with_bcfilter(function(cmds, r)
-				bcfilter.reconcile({})
+				bcfilter.reconcile({{ifname = "wlan0", macs = {}}})
 				assert_eq(r.runs, 1, "one nft run")
 				assert_true(contains(cmds, "nft delete table bridge openuf_bcfilt"),
 					"deletes before recreating (idempotent)")
@@ -65,10 +65,20 @@ return {
 		end
 	},
 	{
-		name = "bcfilter: reconcile uses a table separate from firewall.lua's",
+		name = "bcfilter: with no WLAN to filter the table goes, no empty chain left on the forward hook",
 		fn = function()
 			with_bcfilter(function(cmds)
 				bcfilter.reconcile({})
+				assert_true(contains(cmds, "nft delete table bridge openuf_bcfilt"), "the table is deleted")
+				assert_false(contains(cmds, "add chain"), "and no chain is built")
+			end)
+		end
+	},
+	{
+		name = "bcfilter: reconcile uses a table separate from firewall.lua's",
+		fn = function()
+			with_bcfilter(function(cmds)
+				bcfilter.reconcile({{ifname = "wlan0", macs = {}}})
 				-- firewall.lua deletes and recreates `bridge openuf` wholesale on
 				-- every block/unblock; sharing that table would wipe these rules.
 				assert_false(joined(cmds):find("bridge openuf ", 1, true) ~= nil,

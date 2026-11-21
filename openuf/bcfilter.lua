@@ -121,10 +121,24 @@ local LIMIT_BURST = "50 packets"
 -- is "block all group-addressed traffic to this SSID", which is a meaningful
 -- (if aggressive) setting rather than a no-op.
 --
--- Safe with an empty/nil list (leaves an empty table in place, blocking
--- nothing) and safe to call repeatedly.
+-- Safe with an empty/nil list and safe to call repeatedly. With no VAP to
+-- filter the table goes entirely: an empty base chain still sat on the
+-- bridge's forward hook, and every bridged frame paid the hook's call -- on
+-- a single-core MIPS AP, at every packet of a speed test.
 function M.reconcile(rules)
 	local T = NFT_TABLE
+	local any = false
+	for _, rule in ipairs(rules or {}) do
+		if rule.ifname and valid_ifname(rule.ifname) then any = true end
+	end
+	if not any then
+		for _, rule in ipairs(rules or {}) do
+			if rule.ifname then
+				io.stderr:write(("bcfilter: ignoring odd interface name %q\n"):format(tostring(rule.ifname)))
+			end
+		end
+		return (util.nft_apply(T, nil, M._exec))
+	end
 	local stmts = {"add chain " .. T .. " bcfilt { type filter hook forward priority 0; }"}
 	local drop_of = {}   -- statement index -> the ifname its drop rule is for
 	for _, rule in ipairs(rules or {}) do
