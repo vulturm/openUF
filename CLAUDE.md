@@ -62,6 +62,11 @@ make deps-update                     # move the rrb-unifi pin, only if both suit
 make deps-check HOST=<ap-ip>         # read-only (refreshes the AP's package index)
 make deps-deploy HOST=<ap-ip>        # sh tools/deps.sh: upgrade them; a wpad upgrade restarts the radios
 
+# The whole tree onto APs: hotpatch.sh per host, the daemon and, where luci-app-openuf
+# is installed, its pages and rpcd backend (backups in <tree>/.pre-hotpatch-luci/)
+make deploy HOST=<ap-ip>             # REPUSH=1 also asks the controller for a full push
+make deploy-check HOST=<ap-ip>       # read-only: the build each AP runs, against this tree
+
 # Shell syntax — BOTH, every time (see "Shell code" below); `make sh-check` does all of them
 bash -n setup.sh && dash -n setup.sh
 ```

@@ -15,6 +15,9 @@
 #   make deps-update   move the rrb-unifi pin to the latest release that passes both suites
 #   make deps-check HOST="ip ..."   on the APs: upgradable dependency packages, rrb-unifi vs pin
 #   make deps-deploy HOST="ip ..."  upgrade them and install the pinned rrb-unifi (tools/deps.sh)
+#   make deploy HOST="ip ..."       this tree onto each AP's running openUF and its web UI
+#                                   (tools/hotpatch.sh; REPUSH=1 also asks for a full push)
+#   make deploy-check HOST="ip ..." read-only: the build each AP runs, from its status file
 #   make release-archive VERSION=x.y.z
 #   make shell      an interactive shell in the image
 #   make image      (re)build the image; every other target does this when it is missing
@@ -59,7 +62,7 @@ SH_SCRIPTS := setup.sh install.sh update.sh \
 	$(wildcard package/luci-app-openuf/root/etc/uci-defaults/*) \
 	$(wildcard package/luci-theme-halo/root/etc/uci-defaults/*)
 
-.PHONY: test verify dist sh-check simulate ci rrb-compat deps-update deps-check deps-deploy release-archive shell image ensure-image
+.PHONY: test verify dist sh-check simulate ci rrb-compat deps-update deps-check deps-deploy deploy deploy-check release-archive shell image ensure-image
 
 test: $(ENSURE)
 	$(RUN) 'OPENUF_REQUIRE_GCM=1 lua tests/run_tests.lua'
@@ -97,6 +100,19 @@ deps-check:
 deps-deploy:
 	@test -n "$(HOST)" || { echo 'HOST="<ap-ip> [ap-ip...]" is required'; exit 1; }
 	sh tools/deps.sh $(HOST)
+
+# hotpatch.sh, not deploy.sh: deploy.sh only updates /opt/openuf, the dormant
+# copy on a device that has the package. One AP at a time, stopping at the first
+# that fails. On the host for the ssh keys; the build itself goes to the image.
+deploy:
+	@test -n "$(HOST)" || { echo 'HOST="<ap-ip> [ap-ip...]" is required'; exit 1; }
+	@for h in $(HOST); do sh tools/hotpatch.sh $(if $(REPUSH),--repush) $$h || exit 1; done
+
+deploy-check:
+	@test -n "$(HOST)" || { echo 'HOST="<ap-ip> [ap-ip...]" is required'; exit 1; }
+	@for h in $(HOST); do printf '%s: ' $$h; ssh -n -o ConnectTimeout=8 -o BatchMode=yes -o LogLevel=ERROR root@$$h \
+		"sed -n 's/^build=//p; s/^last_ok=/last inform /p' /tmp/openuf-status | tr '\n' ' '" || printf 'unreachable'; echo; \
+		printf '  this tree: %s\n' "$$(git describe --tags --always --dirty 2>/dev/null)"; done
 
 # The release workflow's source archive: make release-archive VERSION=1.2.3
 release-archive: $(ENSURE)
