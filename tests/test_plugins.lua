@@ -272,6 +272,29 @@ return {
 				assert_nil(gone.ft_psk_generate_local, "unlisted -> its option is gone")
 				assert_eq(gone.mobility_domain, base.mobility_domain, "and openUF's value is back")
 			end)
+
+			-- A plugin asking the BSSID of a VAP with no live interface yet
+			-- (rrb-unifi's nas_identifier) is remembered, so inform can push
+			-- again once the VAP is up.
+			with_plugins({p = plugin_src([[
+				extra.nasid = ctx.bssid(vap.radio, vap.ssid) or 'none']])}, function()
+				local s = run({config = {plugins = {"p"}}})
+				assert_eq(s.nasid, "none", "no interface: no BSSID")
+				assert_eq(#ucihelper._bssid_misses, 1, "the miss is remembered")
+				assert_eq(ucihelper._bssid_misses[1].ssid, "corp", "for that VAP")
+				assert_false(ucihelper.bssid_misses_resolved(), "still down: nothing to do")
+				local o = ucihelper.vap_bssid
+				ucihelper.vap_bssid = function() return "00:00:5e:00:53:2b" end
+				local ok, err = pcall(function()
+					assert_true(ucihelper.bssid_misses_resolved(), "up now")
+					assert_eq(#ucihelper._bssid_misses, 0, "and forgotten until the next apply")
+					assert_false(ucihelper.bssid_misses_resolved(), "once")
+				end)
+				ucihelper.vap_bssid = o
+				if not ok then error(err, 0) end
+				run({config = {plugins = {}}})
+				assert_eq(#ucihelper._bssid_misses, 0, "each apply starts the list over")
+			end)
 		end
 	},
 	{
