@@ -5046,7 +5046,7 @@ function M.handle_response(json_str, st, cfg)
 							ap_off_radios = M._ap_off_radios(st, cfg),
 							backhaul = backhaul_plan})
 					M._deny_reloaded()   -- apply_config ran `wifi reload`
-					M._regd_pending = true   -- the push may have changed the country
+					M._regd_pending, M._regd_tries = true, 0   -- the push may have changed the country
 				end
 			end
 
@@ -7037,6 +7037,11 @@ end
 -- (which may change the country). Nothing is changed: no userspace setting can
 -- lift a driver's own regdomain.
 M._regd_pending = true
+-- Heartbeats a radio with a country but no live interface is waited for:
+-- one with no WLAN on its band never gets one, and kept `iw reg get` forked
+-- every heartbeat for the daemon's life. A push re-arms the check.
+M.REGD_TRIES = 30
+M._regd_tries = 0
 M._regd_warned = {}
 M._regd_mismatch = nil   -- "radio0:US!=HK,radio1:US!=HK" while one holds
 
@@ -7076,7 +7081,8 @@ function M._regd_tick(cfg)
 		end
 	end
 	M._regd_mismatch = (#bad > 0) and table.concat(bad, ",") or nil
-	if judged then M._regd_pending = false end
+	M._regd_tries = M._regd_tries + 1
+	if judged or M._regd_tries >= M.REGD_TRIES then M._regd_pending = false end
 end
 
 -- One heartbeat of the wireless-uplink policy (backhaul.lua): wired first,
@@ -7086,15 +7092,29 @@ function M._backhaul_tick(st, cfg)
 	if not (M._backhaul and M._backhaul.tick) then return nil end
 	local before = st and st.backhaul_mode
 	local mode = M._backhaul.tick(st, cfg, M._ucihelper, M._sysinfo, M._state)
-	-- With uplink_radio_aps off, which radio carries no SSIDs depends on the
-	-- uplink: a switch between wire and air needs the WLANs pushed again, and
-	-- the controller would never send them unasked (cfgversion matches).
-	if mode and before and mode ~= before and M._uplink_radio_aps_off(cfg)
-			and st.adopted and st.cfgversion ~= "" then
-		st.cfgversion = ""
-		M._state.save(st)
+	-- A switch between wire and air needs the push applied again when it
+	-- depended on the uplink: with uplink_radio_aps off, which radio carries
+	-- no SSIDs; back on the wire, the controller's channel for a radio that
+	-- follow_parent_channel had moved to the parent's (pin_parent_channel
+	-- stops once the uplink is wired). The controller would never send it
+	-- unasked (cfgversion matches) and answered noop for minutes when asked,
+	-- so the last push is also replayed here.
+	local why
+	if mode and before and mode ~= before then
+		if M._uplink_radio_aps_off(cfg) then
+			why = "the WLANs (uplink_radio_aps)"
+		elseif mode == "wired" and st.backhaul_parent_channel then
+			why = "the planned channel, not the parent's"
+		end
+	end
+	if why and st.adopted then
+		if st.cfgversion ~= "" then
+			st.cfgversion = ""
+			M._state.save(st)
+		end
+		M._replay_due = true
 		io.stderr:write("openuf: the uplink went " .. tostring(mode)
-			.. " -- asking the controller for the WLANs again (uplink_radio_aps)\n")
+			.. " -- applying the last push again for " .. why .. "\n")
 	end
 	return mode
 end
@@ -8584,15 +8604,15 @@ function M._tick(st, cfg, ufhw, ctx)
 		-- BSSID_SETTLE_MAX after the first, and at most once per gap -- each
 		-- replay reloads the WLANs, and a VAP that comes and goes must not
 		-- do that on every heartbeat.
+		-- Asked during the gap too, so the settle time counts from the first
+		-- WLAN coming up, not from the gap's end (a sysfs read per listed VAP,
+		-- only while one is listed).
 		local now = M._time()
-		local ok, up, total = false, nil, nil
-		-- No sysfs reads while the gap holds the replay back anyway.
-		if now - (M._bssid_replay_at or -math.huge) >= M.BSSID_REPLAY_GAP then
-			ok, up, total = pcall(ufuci.bssid_misses_status)
-		end
+		local ok, up, total = pcall(ufuci.bssid_misses_status)
 		if ok and up and up > 0 then
 			M._bssid_first_up = M._bssid_first_up or now
-			if up >= total or now - M._bssid_first_up >= M.BSSID_SETTLE_MAX then
+			if (up >= total or now - M._bssid_first_up >= M.BSSID_SETTLE_MAX)
+				and now - (M._bssid_replay_at or -math.huge) >= M.BSSID_REPLAY_GAP then
 				M._bssid_replay_at, M._bssid_first_up = now, nil
 				pcall(M._replay_last_push, st, cfg, "a WLAN came up after its push and a plugin needs its BSSID")
 			end

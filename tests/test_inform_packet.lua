@@ -9893,12 +9893,21 @@ return {
 			inform._backhaul_tick(st, {config = {}})
 			assert_eq(st.cfgversion, "abc", "option on: a switch changes no WLAN")
 			st.backhaul_mode, next_mode = "wireless", "wired"
-			inform._backhaul_tick(st, off)
+			with_stderr(function() inform._backhaul_tick(st, off) end)
 			assert_eq(st.cfgversion, "", "option off: the switch asks for a push")
 			assert_eq(saves, 1, "and is saved")
+			assert_true(inform._replay_due, "and the last push is replayed, not only asked for")
+			inform._replay_due = false
 			st.cfgversion = "def"
 			inform._backhaul_tick(st, off)
 			assert_eq(st.cfgversion, "def", "no switch, no push")
+			assert_false(inform._replay_due, "nor a replay")
+			-- Back on the wire after following the parent: the planned channel.
+			st.backhaul_mode, next_mode, st.backhaul_parent_channel = "wireless", "wired", 124
+			with_stderr(function() inform._backhaul_tick(st, {config = {}}) end)
+			assert_eq(st.cfgversion, "", "the followed channel asks for a push")
+			assert_true(inform._replay_due, "and replays it")
+			inform._replay_due = false
 			inform._backhaul, inform._state = o_bh, o_state
 		end
 	},
@@ -9952,6 +9961,14 @@ return {
 			assert_contains(out, "radio1 runs under regulatory domain US, not HK", "the second radio")
 			assert_eq(inform._regd_mismatch, "radio0:US!=HK,radio1:US!=HK", "both")
 			assert_false(inform._regd_pending, "every radio judged: done until the next push")
+			-- A radio that never gets an interface (no WLAN on its band): given
+			-- up after REGD_TRIES heartbeats instead of forking iw for good.
+			up.radio1 = nil
+			inform._regd_pending, inform._regd_tries, inform._regd_warned = true, 0, {}
+			for _ = 1, inform.REGD_TRIES - 1 do with_stderr(function() inform._regd_tick(nil) end) end
+			assert_true(inform._regd_pending, "still waiting before REGD_TRIES")
+			with_stderr(function() inform._regd_tick(nil) end)
+			assert_false(inform._regd_pending, "given up at REGD_TRIES")
 			-- A board whose radios follow UCI's domain says nothing.
 			reg = "global\ncountry HK: DFS-ETSI\n"
 			inform._regd_pending, inform._regd_warned = true, {}
@@ -9960,6 +9977,7 @@ return {
 			assert_nil(inform._regd_mismatch, "nothing for the status file")
 			inform._ucihelper, inform._sysinfo, inform._read_file = o[1], o[2], o[3]
 			inform._regd_pending, inform._regd_warned, inform._regd_mismatch = true, {}, nil
+			inform._regd_tries = 0
 		end
 	},
 }
