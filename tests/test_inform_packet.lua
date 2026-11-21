@@ -7148,33 +7148,44 @@ return {
 		end
 	},
 	{
-		name = "inform: _tick replays the last push once a WLAN a plugin needed the BSSID of is up, at most once per gap",
+		name = "inform: _tick replays the last push once every WLAN a plugin needed the BSSID of is up, or the settle time ran out",
 		fn = function()
 			with_tick_env(function()
-				local o_replay, o_t, o_at = inform._replay_last_push, inform._time, inform._bssid_replay_at
-				local resolved, replays, why = false, 0, nil
-				inform._ucihelper = {bssid_misses_resolved = function() return resolved end}
+				local o_replay, o_t = inform._replay_last_push, inform._time
+				local o_at, o_first = inform._bssid_replay_at, inform._bssid_first_up
+				local up, total, replays, why = 0, 2, 0, nil
+				inform._ucihelper = {bssid_misses_status = function() return up, total end}
 				inform._replay_last_push = function(_, _, w) replays = replays + 1; why = w; return true end
 				inform._http_post = function() return nil, "unreachable" end
-				inform._bssid_replay_at = nil
+				inform._bssid_replay_at, inform._bssid_first_up = nil, nil
 				local now = 1000
 				inform._time = function() return now end
 				local ok, err = pcall(function()
 					local st, ctx = sample_state(), fresh_ctx()
-					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+					local function tick() with_stderr(function() inform._tick(st, nil, nil, ctx) end) end
+					tick()
 					assert_eq(replays, 0, "nothing came up: no replay")
-					resolved = true
-					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
-					assert_eq(replays, 1, "came up: replayed")
+					up = 1; now = now + 5; tick()
+					assert_eq(replays, 0, "one of two up: waits for the other")
+					up = 2; now = now + 5; tick()
+					assert_eq(replays, 1, "both up: one replay")
 					assert_contains(why, "BSSID", "and the log says why")
-					now = now + inform.BSSID_REPLAY_GAP - 1
-					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+					-- The replay listed one again (it went down meanwhile), and
+					-- it comes up within the gap: held until the gap passes.
+					up, total = 1, 1; now = now + 10; tick()
 					assert_eq(replays, 1, "within the gap: not again")
-					now = now + 1
-					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+					now = now + inform.BSSID_REPLAY_GAP; tick()
 					assert_eq(replays, 2, "after it: again")
+					-- One of two never comes back: the settle time releases the other.
+					up, total = 1, 2; now = now + inform.BSSID_REPLAY_GAP; tick()
+					assert_eq(replays, 2, "first up: waiting")
+					now = now + inform.BSSID_SETTLE_MAX - 1; tick()
+					assert_eq(replays, 2, "still within the settle time")
+					now = now + 1; tick()
+					assert_eq(replays, 3, "settle time over: replayed without the missing one")
 				end)
-				inform._replay_last_push, inform._time, inform._bssid_replay_at = o_replay, o_t, o_at
+				inform._replay_last_push, inform._time = o_replay, o_t
+				inform._bssid_replay_at, inform._bssid_first_up = o_at, o_first
 				if not ok then error(err, 0) end
 			end)
 		end

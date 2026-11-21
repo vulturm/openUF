@@ -4295,6 +4295,12 @@ M.LAST_PUSH_FILE = "/tmp/openuf-last-push.json"
 -- The least time between two replays for a WLAN that came up after its push
 -- (_tick); each one reloads the WLANs.
 M.BSSID_REPLAY_GAP = 300
+-- How long the replay waits, from the first of those WLANs coming up, for the
+-- rest. A radio's BSSes leave a DFS CAC seconds apart: replaying on the first
+-- one gave it its nas_identifier and left the next one without, behind the
+-- gap above (a hAP ac, eG up, AP-guest up seconds later). One still down
+-- after this (disabled from the controller since) no longer holds the others.
+M.BSSID_SETTLE_MAX = 120
 M._chmod600 = function(path) return os.execute("chmod 600 '" .. path:gsub("'", "'\\''") .. "'") end
 
 function M._save_last_push(json_str)
@@ -8696,15 +8702,23 @@ function M._tick(st, cfg, ufhw, ctx)
 	if M._replay_due then
 		M._replay_due = false
 		pcall(M._replay_last_push, st, cfg)
-	elseif ufuci and ufuci.bssid_misses_resolved
-		and (M._time() - (M._bssid_replay_at or -math.huge)) >= M.BSSID_REPLAY_GAP then
-		-- A WLAN a plugin needed the BSSID of came up after its push
-		-- (ucihelper._bssid_misses). At most once per gap: a VAP that comes
-		-- and goes must not reload the radios on every heartbeat.
-		local ok, resolved = pcall(ufuci.bssid_misses_resolved)
-		if ok and resolved then
-			M._bssid_replay_at = M._time()
-			pcall(M._replay_last_push, st, cfg, "a WLAN came up after its push and a plugin needs its BSSID")
+	elseif ufuci and ufuci.bssid_misses_status then
+		-- WLANs a plugin needed the BSSID of came up after their push
+		-- (ucihelper._bssid_misses): one replay once all of them are up, or
+		-- BSSID_SETTLE_MAX after the first, and at most once per gap -- each
+		-- replay reloads the WLANs, and a VAP that comes and goes must not
+		-- do that on every heartbeat.
+		local ok, up, total = pcall(ufuci.bssid_misses_status)
+		if ok and up and up > 0 then
+			local now = M._time()
+			M._bssid_first_up = M._bssid_first_up or now
+			if (up >= total or now - M._bssid_first_up >= M.BSSID_SETTLE_MAX)
+				and now - (M._bssid_replay_at or -math.huge) >= M.BSSID_REPLAY_GAP then
+				M._bssid_replay_at, M._bssid_first_up = now, nil
+				pcall(M._replay_last_push, st, cfg, "a WLAN came up after its push and a plugin needs its BSSID")
+			end
+		else
+			M._bssid_first_up = nil
 		end
 	end
 	-- Each WLAN's own Minimum Data Rate (ucihelper.apply_rate_masks): again
