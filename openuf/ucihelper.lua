@@ -3817,10 +3817,15 @@ function M.backhaul_set_uplink_enabled(enabled)
 	return changed
 end
 
--- The regulatory domain UCI programs for a radio (its `country`), or nil.
+-- The regulatory domain UCI programs for a radio (its `country`), or nil --
+-- also for a disabled radio, which programs none: _regd_tick waits for every
+-- radio that has one to come up, and a disabled one never does (it forked
+-- `iw reg get` every heartbeat on a hAP ac with 2.4 GHz switched off).
 function M.radio_country(radio)
 	if type(radio) ~= "string" then return nil end
-	local c = get_uci().cursor():get("wireless", radio, "country")
+	local cursor = get_uci().cursor()
+	if cursor:get("wireless", radio, "disabled") == "1" then return nil end
+	local c = cursor:get("wireless", radio, "country")
 	return (type(c) == "string" and c ~= "") and c:upper() or nil
 end
 
