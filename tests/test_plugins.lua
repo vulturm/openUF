@@ -282,13 +282,14 @@ return {
 				assert_eq(s.nasid, "none", "no interface: no BSSID")
 				assert_eq(#ucihelper._bssid_misses, 1, "the miss is remembered")
 				assert_eq(ucihelper._bssid_misses[1].ssid, "corp", "for that VAP")
-				assert_false(ucihelper.bssid_misses_resolved(), "still down: nothing to do")
+				local up, total = ucihelper.bssid_misses_status()
+				assert_eq(up .. "/" .. total, "0/1", "still down")
 				local o = ucihelper.vap_bssid
 				ucihelper.vap_bssid = function() return "00:00:5e:00:53:2b" end
 				local ok, err = pcall(function()
-					assert_true(ucihelper.bssid_misses_resolved(), "up now")
-					assert_eq(#ucihelper._bssid_misses, 0, "and forgotten until the next apply")
-					assert_false(ucihelper.bssid_misses_resolved(), "once")
+					up, total = ucihelper.bssid_misses_status()
+					assert_eq(up .. "/" .. total, "1/1", "up now")
+					assert_eq(#ucihelper._bssid_misses, 1, "kept until the next apply")
 				end)
 				ucihelper.vap_bssid = o
 				if not ok then error(err, 0) end
