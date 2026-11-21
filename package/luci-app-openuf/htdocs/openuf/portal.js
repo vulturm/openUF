@@ -530,6 +530,9 @@
 						(n.self ? 'This access point, ' : '') + (n.ssid || '') + ' · ' + n.bssid + (n.channel ? ' · channel ' + n.channel : ''))))));
 			rows.push(line);
 		}
+		// handover.lua: read at each push, so it applies to the next reload.
+		rows.push(row('Move clients before a Wi-Fi restart', 'When a change from the controller restarts a network here, first ask its clients to roam to a neighbouring access point. They leave while this one still holds their fast-roaming keys, so the move is quick instead of a full reconnect. Clients that ignore the request are dropped by the restart, as before.',
+			toggle('handover_before_reload', '1', ro), { inline: true }));
 		if (r)
 			rows.push(row('Fast roaming with UniFi access points', 'The 802.11r translator (rrb-unifi) that lets clients hand over between this access point and genuine UniFi ones without a full reconnect.',
 				h('span', { class: 'value' }, r.rrb_unifi ? 'Installed' : 'Not installed'), { inline: true }));
