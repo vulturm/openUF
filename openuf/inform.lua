@@ -4327,7 +4327,7 @@ function M._reconcile_local_options(st, cfg)
 		had = M._push_options_fp({config = {controller_steering = (st.steering_local ~= "off")}})
 	end
 	local changed = had ~= want
-	if st.push_options == want and not changed then return false end
+	if st.push_options == want then return false end
 	st.push_options = want
 	st.steering_local = nil
 	if changed and st.adopted and st.cfgversion ~= "" then st.cfgversion = "" end
@@ -5031,16 +5031,17 @@ function M.handle_response(json_str, st, cfg)
 					if M._backhaul and M._backhaul.pin_parent_channel then
 						pcall(M._backhaul.pin_parent_channel, radio_table, st, ufuci)
 					end
+					local peer_sysid = M._peer_sysid(cfg)
 					pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
 							roam_assist_active = roam_assist_active,
 							device_name = device_name, keep_vlans = port_vlans,
-							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac, M._peer_sysid(cfg)),
+							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac, peer_sysid),
 							-- UniFi's name element, for the WLANs with "Show
 							-- Access Point Name in Beacon" on; only alongside
 							-- UniFi's sibling element (unifi_sibling_ie).
-							ap_name_ie = M._peer_sysid(cfg)
+							ap_name_ie = peer_sysid
 								and M._sysinfo.ubnt_name_ie_hex(device_name) or nil,
 							ap_off_radios = M._ap_off_radios(st, cfg),
 							backhaul = backhaul_plan})
@@ -8202,18 +8203,22 @@ function M._write_status(st, fields)
 		lines[#lines + 1] = "rollback=" .. tostring(s.rollback)
 		lines[#lines + 1] = "rollback_msg=" .. tostring(s.rollback_msg or ""):gsub("[\r\n]", " ")
 	end
-	-- A wireless child whose APs cannot start on the parent's channel
-	-- (backhaul.check_ap_stall): healthy informs, nothing on the air. Only while
-	-- it lasts, as <radio>:<channel>:<dfs|unknown>.
 	-- A radio whose driver applies another regulatory domain than UCI's
 	-- (_regd_tick), as radio:have!=want pairs.
 	if M._regd_mismatch then lines[#lines + 1] = "regd_mismatch=" .. M._regd_mismatch end
 	-- What started usteer (_steering_flags), as one JSON object: SSIDs may hold
-	-- any character but a newline, and cjson escapes those too.
+	-- any character but a newline, and cjson escapes those too. Encoded once
+	-- per push (a new table), not once per status write.
 	if M._steering_why then
-		local ok_j, j = pcall(cjson.encode, M._steering_why)
-		if ok_j then lines[#lines + 1] = "steering=" .. j end
+		if M._steering_json_of ~= M._steering_why then
+			local ok_j, j = pcall(cjson.encode, M._steering_why)
+			M._steering_json_of, M._steering_json = M._steering_why, ok_j and j or nil
+		end
+		if M._steering_json then lines[#lines + 1] = "steering=" .. M._steering_json end
 	end
+	-- A wireless child whose APs cannot start on the parent's channel
+	-- (backhaul.check_ap_stall): healthy informs, nothing on the air. Only while
+	-- it lasts, as <radio>:<channel>:<dfs|unknown|cac>.
 	local stall = M._backhaul and M._backhaul.ap_stall
 	if type(stall) == "table" then
 		lines[#lines + 1] = ("ap_stall=%s:%s:%s"):format(tostring(stall.radio),
@@ -8579,12 +8584,15 @@ function M._tick(st, cfg, ufhw, ctx)
 		-- BSSID_SETTLE_MAX after the first, and at most once per gap -- each
 		-- replay reloads the WLANs, and a VAP that comes and goes must not
 		-- do that on every heartbeat.
-		local ok, up, total = pcall(ufuci.bssid_misses_status)
+		local now = M._time()
+		local ok, up, total = false, nil, nil
+		-- No sysfs reads while the gap holds the replay back anyway.
+		if now - (M._bssid_replay_at or -math.huge) >= M.BSSID_REPLAY_GAP then
+			ok, up, total = pcall(ufuci.bssid_misses_status)
+		end
 		if ok and up and up > 0 then
-			local now = M._time()
 			M._bssid_first_up = M._bssid_first_up or now
-			if (up >= total or now - M._bssid_first_up >= M.BSSID_SETTLE_MAX)
-				and now - (M._bssid_replay_at or -math.huge) >= M.BSSID_REPLAY_GAP then
+			if up >= total or now - M._bssid_first_up >= M.BSSID_SETTLE_MAX then
 				M._bssid_replay_at, M._bssid_first_up = now, nil
 				pcall(M._replay_last_push, st, cfg, "a WLAN came up after its push and a plugin needs its BSSID")
 			end
