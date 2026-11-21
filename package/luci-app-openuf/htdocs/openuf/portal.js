@@ -530,6 +530,11 @@
 						(n.self ? 'This access point, ' : '') + (n.ssid || '') + ' · ' + n.bssid + (n.channel ? ' · channel ' + n.channel : ''))))));
 			rows.push(line);
 		}
+		// clientmatch.lua: read every heartbeat. It needs the clients' beacon
+		// reports, which "Ask clients to scan" also collects; the collection
+		// runs for it on its own.
+		rows.push(row('Steer clients to a better access point', 'A client that stays on a weak signal here is asked which access points it hears, and when one of the site\'s others (or this one\'s other band) is clearly louder, it is asked to move there. A request, never a disconnect. Only networks without the controller\'s Roaming Assistant, and only clients that support it.',
+			toggle('client_steering', '0', ro), { inline: true }));
 		// handover.lua: read at each push, so it applies to the next reload.
 		rows.push(row('Move clients before a Wi-Fi restart', 'When a change from the controller restarts a network here, first ask its clients to roam to a neighbouring access point. They leave while this one still holds their fast-roaming keys, so the move is quick instead of a full reconnect. Clients that ignore the request are dropped by the restart, as before.',
 			toggle('handover_before_reload', '1', ro), { inline: true }));
