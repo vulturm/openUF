@@ -357,6 +357,15 @@
 		return sel;
 	}
 
+	// A select over fixed steps that keeps a hand-set value selectable, or
+	// opening the page would offer to rewrite it.
+	function steps(opt, dflt, list, label) {
+		const cur = String(value(opt, dflt));
+		const out = list.slice();
+		if (!out.some(c => c.value === cur)) out.push({ value: cur, label: label(cur) });
+		return out;
+	}
+
 	function text(opt, dflt, attrs, validate) {
 		const input = h('input', Object.assign({ class: 'input', type: 'text', spellcheck: 'false' }, attrs || {}));
 		input.value = value(opt, dflt);
@@ -478,6 +487,15 @@
 			rows.push(row('Follow the controller\'s steering',
 				'Run usteer for Band Steering and Roaming Assistant when the controller turns them on. Off, this access point ignores both and openUF keeps the neighbour lists; other access points go on steering, and the controller still shows both as on here. 802.11k, 802.11v and fast roaming stay on. Takes effect within a minute.',
 				toggle('controller_steering', '1', ro), { inline: true }));
+			// roamassist.lua reads it each time it judges a client; usteer's
+			// own thresholds are untouched. Only while this AP follows the
+			// controller's Roaming Assistant.
+			const following = value('controller_steering', '1') === '1';
+			const dbSteps = steps('roam_assist_diff_db', '8', ['4', '6', '8', '10', '12'].map(v => ({ value: v, label: v + ' dB' })), v => v + ' dB');
+			rows.push(row('Roaming Assistant: move only to a louder access point', following
+				? 'How much better, in dB, another access point must hear a weak client before it is moved there. Lower moves clients sooner; higher keeps them put unless the other access point is clearly better. The weak-signal threshold itself is the controller\'s.'
+				: 'Not used while this access point ignores the controller\'s steering.',
+				select('roam_assist_diff_db', '8', dbSteps, ro || !following)));
 			if (value('controller_steering', '1') === '0' && asked)
 				rows.push(h('div', { class: 'notice' }, h('span', { html: ICON.info }), h('div', {},
 					h('strong', {}, 'Ignored on this access point:'), h('ul', { class: 'todo' }, items()),
@@ -572,16 +590,21 @@
 
 		groups.push(roamingGroup(ro));
 
-		// The controller's Environment view. A value set by hand that is not
-		// one of the steps stays selectable, or opening the page would offer
-		// to rewrite it.
-		const scanSteps = [{ value: '0', label: 'Never' }, { value: '300', label: 'Every 5 minutes' },
-			{ value: '900', label: 'Every 15 minutes' }, { value: '3600', label: 'Every hour' }];
-		const scanNow = String(value('neighbour_scan_interval', '0'));
-		if (!scanSteps.some(c => c.value === scanNow)) scanSteps.push({ value: scanNow, label: 'Every ' + scanNow + ' s' });
+		// The controller's Environment view.
+		const scanSteps = steps('neighbour_scan_interval', '0', [{ value: '0', label: 'Never' }, { value: '300', label: 'Every 5 minutes' },
+			{ value: '900', label: 'Every 15 minutes' }, { value: '3600', label: 'Every hour' }], v => 'Every ' + v + ' s');
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Radio environment'),
 			row('Ask clients to scan', 'Have one capable client at a time report the networks it hears. The access point never leaves its channel; the client does, for about a second.', toggle('rrm_enrichment', '1', ro), { inline: true }),
+			// Across all radios and clients together (conf.lua). Each answer
+			// also writes a burst of BEACON-RESP lines to the system log.
+			row('How often to ask', value('rrm_enrichment', '1') === '1'
+				? 'One client is asked per interval, across all radios. Shorter keeps the Environment view fresher, and fills the system log faster.'
+				: 'Not used while client scans are off.',
+				select('rrm_request_interval', '600', steps('rrm_request_interval', '600', [
+					{ value: '300', label: 'Every 5 minutes' }, { value: '600', label: 'Every 10 minutes' },
+					{ value: '1800', label: 'Every 30 minutes' }, { value: '3600', label: 'Every hour' }],
+					v => 'Every ' + v + ' s'), ro || value('rrm_enrichment', '1') !== '1')),
 			row('Scan for neighbouring networks', 'The access point scans a few channels at a time, under half a second off the air each, so the controller\'s Environment view and the neighbour lists see other channels. On a wireless (mesh) uplink the radio carrying it is never scanned, so the uplink is not interrupted.',
 				select('neighbour_scan_interval', '0', scanSteps, ro)),
 			row('Scan now', 'One scan right away, the same as above. The neighbour lists are rewritten when it ends, in about a minute.',
