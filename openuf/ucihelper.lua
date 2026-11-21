@@ -1423,6 +1423,33 @@ function M.vap_bssid(radio, ssid)
 	return mac_of(M.get_ifname_for_vap(radio, ssid))
 end
 
+-- The VAPs a plugin asked the BSSID of, during the last apply_config, while
+-- they had no live interface. rrb-unifi's nas_identifier is the BSSID, so a
+-- WLAN that came up only after its push (5 GHz client SSIDs that waited out
+-- uplink_radio_aps, a DFS CAC) kept 802.11r without an R0KH-ID: UniFi peers
+-- cannot fetch its keys, every FT roam into it fails, and the controller
+-- raised "WiFi roaming config broken". Nothing pushes again by itself, so
+-- inform replays the push once one of these has an address.
+M._bssid_misses = {}
+
+local function plugin_bssid(radio, ssid)
+	local b = M.vap_bssid(radio, ssid)
+	if not b then M._bssid_misses[#M._bssid_misses + 1] = {radio = radio, ssid = ssid} end
+	return b
+end
+
+-- true once a VAP that had no BSSID at the last apply has one; the list is
+-- emptied then, and the replay fills it again with whatever is still down.
+function M.bssid_misses_resolved()
+	for _, m in ipairs(M._bssid_misses) do
+		if M.vap_bssid(m.radio, m.ssid) then
+			M._bssid_misses = {}
+			return true
+		end
+	end
+	return false
+end
+
 -- ─── The veth pair an earlier openUF wrote for its own translator ──────────
 -- Until 2026-11-02 this tree vendored the rrb-unifi translator and wrote its
 -- veth pair into /etc/config/network as these three sections (apply_config
@@ -2378,6 +2405,7 @@ function M.apply_config(resp, cfg, opts)
 		local plugins = get_plugins()
 		if plugins and plugins.begin_pass then plugins.begin_pass() end
 	end
+	M._bssid_misses = {}
 	for _, vap in ipairs(vap_table) do
 		if vap.ssid and vap.radio then
 			local extra = {}
@@ -3040,7 +3068,7 @@ function M.apply_config(resp, cfg, opts)
 				if plugins then
 					plugins.vap_options(extra, vap, cfg, {
 						DELETE = M.DELETE,
-						bssid  = M.vap_bssid,
+						bssid  = plugin_bssid,
 						cursor = function() return get_uci().cursor() end,
 					})
 				end
