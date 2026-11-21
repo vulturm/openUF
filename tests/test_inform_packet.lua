@@ -7101,6 +7101,14 @@ return {
 				inform._push_options_fp({config = {}}), "explicit defaults read as unset")
 			assert_true(inform._push_options_fp({config = {use_only_unifi_wlan = true}})
 				~= inform._push_options_fp({config = {}}), "use_only_unifi_wlan on is a change")
+			-- country_override: a change when set or removed, and nothing at
+			-- all while unset, so a device without one keeps its fingerprint.
+			assert_eq(inform._push_options_fp({config = {country_override = ""}}),
+				inform._push_options_fp({config = {}}), "an empty override is no override")
+			assert_false(inform._push_options_fp({config = {}}):find("country", 1, true) ~= nil,
+				"unset: not in the fingerprint")
+			assert_true(inform._push_options_fp({config = {country_override = "HK"}})
+				~= inform._push_options_fp({config = {}}), "setting or removing an override is a change")
 			-- controller_steering's own earlier record counts as applied.
 			local prev = {adopted = true, cfgversion = "y", steering_local = "off"}
 			assert_false(inform._reconcile_local_options(prev, {config = {controller_steering = false}}), "already applied")
@@ -10198,6 +10206,7 @@ return {
 			inform._regd_pending, inform._regd_warned, inform._regd_mismatch = true, {}, nil
 			local out = with_stderr(function() inform._regd_tick(nil) end)
 			assert_contains(out, "radio0 runs under regulatory domain US, not HK", "named, with both domains")
+			assert_contains(out, "the controller's site country", "no override: the controller's")
 			assert_eq(inform._regd_mismatch, "radio0:US!=HK", "kept for the status file")
 			assert_true(inform._regd_pending, "radio1 not up yet: asked again next heartbeat")
 			up.radio1 = "phy1-ap0"
@@ -10214,6 +10223,10 @@ return {
 			assert_true(inform._regd_pending, "still waiting before REGD_TRIES")
 			with_stderr(function() inform._regd_tick(nil) end)
 			assert_false(inform._regd_pending, "given up at REGD_TRIES")
+			-- Under country_override the message names the override, not the controller.
+			inform._regd_pending, inform._regd_tries, inform._regd_warned = true, 0, {}
+			out = with_stderr(function() inform._regd_tick({config = {country_override = "hk"}}) end)
+			assert_contains(out, "country_override in openUF's settings", "the override named as the source")
 			-- A board whose radios follow UCI's domain says nothing.
 			reg = "global\ncountry HK: DFS-ETSI\n"
 			inform._regd_pending, inform._regd_warned = true, {}

@@ -4268,10 +4268,16 @@ end
 -- unset are one state, not a push apart.
 --   use_only_unifi_wlan  ucihelper.set_wlan_exclusive, inside apply_config
 --   device_login         the login is created from the hash a push carries
+--   country_override     rf_config writes it over the pushed country: removed in
+--                        the page, the radios kept it until the next push
 M.PUSH_OPTIONS = {
 	{"controller_steering", true}, {"uplink_radio_aps", true}, {"unifi_sibling_ie", true},
 	{"use_only_unifi_wlan", false}, {"device_login", false},
 }
+-- Options with a value rather than on/off. Fingerprinted only while set, so a
+-- device without one keeps the fingerprint it had before they were added (no
+-- push for an upgrade). Unset and "" are one state.
+M.PUSH_VALUE_OPTIONS = {"country_override"}
 
 function M._push_options_fp(cfg)
 	local c = cfg and cfg.config or {}
@@ -4280,6 +4286,10 @@ function M._push_options_fp(cfg)
 		local v = c[o[1]]
 		if v == nil then v = o[2] end
 		parts[i] = o[1] .. "=" .. (v == true and "on" or "off")
+	end
+	for _, k in ipairs(M.PUSH_VALUE_OPTIONS) do
+		local v = c[k]
+		if v ~= nil and tostring(v) ~= "" then parts[#parts + 1] = k .. "=" .. tostring(v) end
 	end
 	return table.concat(parts, ";")
 end
@@ -7180,12 +7190,20 @@ function M._regd_tick(cfg)
 					local key = r.name .. ":" .. have .. ":" .. want
 					if not M._regd_warned[key] then
 						M._regd_warned[key] = true
+						-- Named by where UCI's country came from: an override
+						-- read as "the controller's site country" sent the
+						-- operator to a controller that had pushed the radio's
+						-- own domain all along (840, US, under an HK override).
+						local ov = cfg and cfg.config and cfg.config.country_override
+						local src = (type(ov) == "string" and ov:upper() == want)
+							and "country_override in openUF's settings, not the controller's country"
+							or "the controller's site country"
 						io.stderr:write(string.format(
-							"openuf: %s runs under regulatory domain %s, not %s (the controller's site\n" ..
-							"openuf: country, in UCI and in the beacons): the %s driver keeps a domain of its\n" ..
+							"openuf: %s runs under regulatory domain %s, not %s (%s,\n" ..
+							"openuf: in UCI and in the beacons): the %s driver keeps a domain of its\n" ..
 							"openuf: own, so channels and power limits are %s's. On ath9k/ath10k that is an\n" ..
 							"openuf: EEPROM-locked radio in a build without ATH_USER_REGD.\n",
-							r.name, have, want, phy, have))
+							r.name, have, want, src, phy, have))
 					end
 				end
 			end
