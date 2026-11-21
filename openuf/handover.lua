@@ -136,14 +136,22 @@ local function bssid_of(ifname)
 	return mac and mac:lower() or nil
 end
 
+-- The BSS's clients, and of those the ones that may answer a BSS Transition
+-- request (util.sta_btm: capable, or hostapd too old to say). Only those are
+-- waited for: one without 802.11v never leaves, and held every push that
+-- touched its WLAN up for the whole WAIT.
 local function clients_of(ifname)
 	local t = ubus_json("ubus call hostapd." .. ifname .. " get_clients")
-	local out = {}
-	for mac in pairs(t and type(t.clients) == "table" and t.clients or {}) do
-		if is_mac(mac) then out[#out + 1] = mac:lower() end
+	local all, btm = {}, {}
+	for mac, e in pairs(t and type(t.clients) == "table" and t.clients or {}) do
+		if is_mac(mac) then
+			all[#all + 1] = mac:lower()
+			if util.sta_btm(e) ~= false then btm[#btm + 1] = mac:lower() end
+		end
 	end
-	table.sort(out)
-	return out
+	table.sort(all)
+	table.sort(btm)
+	return all, btm
 end
 
 -- Ask the clients of `ifnames` to leave, then wait for them. Returns the
@@ -157,7 +165,7 @@ function M.run(ifnames)
 	end
 	local asked, watch = 0, {}
 	for _, ifn in ipairs(ifnames) do
-		local clients = clients_of(ifn)
+		local _, clients = clients_of(ifn)
 		if #clients > 0 then
 			local nr = ubus_json("ubus call hostapd." .. ifn .. " rrm_nr_list")
 			local cands = {}
@@ -188,7 +196,7 @@ function M.run(ifnames)
 	for _ = 1, M.WAIT do
 		M._sleep(1)
 		left = 0
-		for _, ifn in ipairs(watch) do left = left + #clients_of(ifn) end
+		for _, ifn in ipairs(watch) do left = left + #select(2, clients_of(ifn)) end
 		if left == 0 then break end
 	end
 	M._log(("%d client(s) of %s asked to roam before the reload; %d still here")

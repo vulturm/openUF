@@ -170,5 +170,17 @@ function M.nft_apply(tables, stmts, exec)
 	return ok, failed
 end
 
+-- Whether a station takes BSS Transition requests (802.11v), from its entry
+-- in hostapd's `get_clients`: Extended Capabilities bit 19 (byte 2, 0x08), the
+-- bit usteer reads too. nil when hostapd lists no extended_capabilities (an
+-- older build): unknown, not "no".
+function M.sta_btm(entry)
+	local ext = type(entry) == "table" and entry.extended_capabilities
+	if type(ext) ~= "table" then return nil end
+	local b = tonumber(ext[3])
+	if not b then return false end
+	return b % 16 >= 8
+end
+
 package.loaded["openuf.util"] = M
 return M
