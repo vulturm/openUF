@@ -4183,6 +4183,44 @@ Wiphy phy2
 		end
 	},
 	{
+		name = "ucihelper: reload_wifi asks the restarting BSSes' clients to roam first, unless the option is off",
+		fn = function()
+			with_ucihelper(function()
+				local order = {}
+				local orig_h, orig_on, orig_run = ucihelper._handover, ucihelper._handover_on, ucihelper._run_cmd
+				ucihelper._handover = {
+					snapshot = function() return {x = {sig = "after"}} end,
+					changed = function(b, a) return b.x.sig ~= a.x.sig end,
+					affected = function() return {"phy1-ap2"} end,
+					run = function(list) order[#order + 1] = "handover " .. table.concat(list, ",") end,
+				}
+				ucihelper._run_cmd = function(cmd) order[#order + 1] = cmd; return 0 end
+				local ok, err = pcall(function()
+					ucihelper._handover_on = true
+					ucihelper.reload_wifi({x = {sig = "before"}})
+					assert_eq(table.concat(order, "|"), "handover phy1-ap2|wifi reload", "clients first, then the reload")
+					order = {}
+					ucihelper.reload_wifi({x = {sig = "after"}})
+					assert_eq(table.concat(order, "|"), "wifi reload", "nothing changed: straight to the reload")
+					order = {}
+					ucihelper._handover_on = false
+					ucihelper.reload_wifi({x = {sig = "before"}})
+					assert_eq(table.concat(order, "|"), "wifi reload", "handover_before_reload = false")
+					ucihelper._handover.run = function() error("boom") end
+					ucihelper._handover_on = true
+					order = {}
+					local real = io.stderr
+					io.stderr = {write = function() end}
+					ucihelper.reload_wifi({x = {sig = "before"}})
+					io.stderr = real
+					assert_eq(table.concat(order, "|"), "wifi reload", "a failing handover never stops the reload")
+				end)
+				ucihelper._handover, ucihelper._handover_on, ucihelper._run_cmd = orig_h, orig_on, orig_run
+				if not ok then error(err, 0) end
+			end)
+		end
+	},
+	{
 		name = "ucihelper: a lookup pass runs ubus once and never outlives a wifi reload",
 		fn = function()
 			with_ucihelper(function()

@@ -190,6 +190,7 @@ local test_files = {
 	"tests/test_guestportal.lua",
 	"tests/test_l2guard.lua",
 	"tests/test_roamassist.lua",
+	"tests/test_handover.lua",
 	"tests/test_airtime.lua",
 	"tests/test_mcsnoop.lua",
 	"tests/test_ota.lua",

@@ -251,6 +251,14 @@ config = {
 	-- Changing it asks the controller for a fresh push, which applies it.
 	controller_steering = true,
 
+	-- Before a `wifi reload` that restarts a BSS (a push changing a radio or a
+	-- WLAN), ask its clients to roam to the 802.11k neighbours first (BSS
+	-- Transition, disassociation imminent) and wait a few seconds for them.
+	-- They leave while this AP still holds their 802.11r keys, so a fast roam
+	-- to a UniFi AP works instead of falling back to a full login. Clients
+	-- without 802.11v are dropped by the reload as before. Read at each push.
+	handover_before_reload = true,
+
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->
 	-- Device Authentication). true creates the site's device login on this
 	-- AP with the password the controller pushes (as a hash), and removes it

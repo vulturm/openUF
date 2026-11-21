@@ -23,6 +23,8 @@ M._minrssi    = nil  -- nil = load openuf/minrssi.lua on first use
 -- The plugin hook (plugins.lua). Injectable; otherwise loaded once per
 -- process, since plugins.lua keeps a load cache and a per-pass memo.
 M._plugins    = nil  -- nil = load openuf/plugins.lua on first use
+-- Clients off a BSS before a reload restarts it (handover.lua).
+M._handover   = nil  -- nil = load openuf/handover.lua on first use
 M._run_cmd    = os.execute
 
 -- Injectable: command execution that captures stdout (for read-only introspection,
@@ -127,6 +129,12 @@ end
 
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
 local function get_minrssi()  return get_sibling("minrssi",  M._minrssi)  end
+local function get_handover() return get_sibling("handover", M._handover) end
+
+-- conf.lua handover_before_reload, as the last push read it: a reload outside
+-- a push (set_radio_channel) has no cfg of its own.
+M._handover_on = true
+
 local _plugins_mod
 local function get_plugins()
 	if M._plugins then return M._plugins end
@@ -2286,6 +2294,8 @@ function M.apply_config(resp, cfg, opts)
 	local radio_table   = resp.radio_table   or {}
 	local vap_table     = resp.vap_table     or {}
 	local cpueth = cfg and cfg.net and cfg.net.lan_cpueth
+	M._handover_on = not (cfg and cfg.config and cfg.config.handover_before_reload == false)
+	local before_reload = M.wifi_snapshot()
 
 	-- "Minimum Data Rate" arrives per WLAN but OpenWrt's rate options are
 	-- per radio, so every VAP sharing a radio collapses to one setting, plus
@@ -3166,7 +3176,7 @@ function M.apply_config(resp, cfg, opts)
 	end
 
 	-- Reload wireless
-	M._run_cmd("wifi reload")
+	M.reload_wifi(before_reload)
 	-- An earlier openUF's own translator veth (LEGACY_FT_VETH_SECTIONS): the
 	-- WLANs that pointed hostapd at it were just rewritten without it, so it
 	-- can go now, and only now.
@@ -3471,6 +3481,35 @@ local function wireless_status()
 	end
 	if M._ws_pass then M._ws_cache = {status = status or false} end
 	return status
+end
+
+-- `wifi reload`, after asking the clients of every BSS it restarts to roam
+-- first (handover.lua). before: handover.snapshot() from ahead of the change.
+-- The UCI change is already committed; the reload happens whatever the
+-- handover does.
+function M.reload_wifi(before)
+	local h = M._handover_on and before and get_handover()
+	if h then
+		local ok, err = pcall(function()
+			local after = h.snapshot(get_uci().cursor())
+			-- Nothing changed: nothing restarts, and no ubus read either.
+			if not h.changed(before, after) then return end
+			M._ws_cache = nil   -- the interfaces running now, not an earlier read of this pass
+			h.run(h.affected(before, after, wireless_status()))
+		end)
+		if not ok then io.stderr:write("openuf: handover failed: " .. tostring(err) .. "\n") end
+	end
+	M._run_cmd("wifi reload")
+	-- Whatever a pass cached about the interfaces is the pre-reload set.
+	M._ws_cache = nil
+end
+
+-- What M.reload_wifi compares against, or nil when the handover is off.
+function M.wifi_snapshot()
+	local h = M._handover_on and get_handover()
+	if not h then return nil end
+	local ok, snap = pcall(h.snapshot, get_uci().cursor())
+	return ok and snap or nil
 end
 
 -- The second netdev of an Enhanced Open transition section, or nil.
@@ -3855,9 +3894,10 @@ function M.set_radio_channel(radio, chan)
 	if type(radio) ~= "string" or not tonumber(chan) then return false end
 	local cursor = get_uci().cursor()
 	if cursor:get("wireless", radio, "channel") == tostring(chan) then return false end
+	local before = M.wifi_snapshot()
 	cursor:set("wireless", radio, "channel", tostring(chan))
 	cursor:commit("wireless")
-	M._run_cmd("wifi reload")
+	M.reload_wifi(before)
 	return true
 end
 
