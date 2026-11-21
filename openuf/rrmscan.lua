@@ -768,8 +768,13 @@ function M.harvest(blob)
 	-- below keeps one record per BSSID whoever reported it, which is the
 	-- Environment's view and not a station's.
 	local by_sta = {}
-	local function heard(sta, bssid, signal)
+	-- RCPI 221-254 is reserved and 255 "not measured" (802.11-2020 9.4.2.38):
+	-- read as levels they come out at 0..+17 dBm, louder than anything real.
+	-- Anything above -10 dBm is a misread too (a client writing signed dBm
+	-- that is not calibrated yet), and a steer must not trust it.
+	local function heard(sta, bssid, signal, raw)
 		if not (sta and bssid and signal) or bssid == "00:00:00:00:00:00" then return end
+		if (tonumber(raw) or 0) > 220 or signal > -10 then return end
 		sta, bssid = sta:lower(), bssid:lower()
 		by_sta[sta] = by_sta[sta] or {}
 		local prev = by_sta[sta][bssid]
@@ -777,7 +782,7 @@ function M.harvest(blob)
 			by_sta[sta][bssid] = {signal = signal, seen_at = now}
 		end
 	end
-	for _, c in ipairs(ctrl) do heard(c.sta, c.rec.bssid, M.signal_of(c.sta, c.rec.rcpi)) end
+	for _, c in ipairs(ctrl) do heard(c.sta, c.rec.bssid, M.signal_of(c.sta, c.rec.rcpi), c.rec.rcpi) end
 	for _, c in ipairs(ctrl) do
 		local r = c.rec
 		if r.band and r.bssid ~= "00:00:00:00:00:00" and not seen[r.bssid] then
@@ -802,7 +807,7 @@ function M.harvest(blob)
 		-- too, and the caller benches those the same as the silent kind.
 		if address and repmode == 0 then
 			reporters[address:lower()] = true
-			if bssid then heard(address, bssid, M.signal_of(address, rcpi)) end
+			if bssid then heard(address, bssid, M.signal_of(address, rcpi), rcpi) end
 		end
 		local band     = M.band_of_channel(channel)
 		if bssid and band and repmode == 0

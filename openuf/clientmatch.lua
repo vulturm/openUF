@@ -12,8 +12,9 @@
 	  1. A client's signal here stays under FLOOR for HOLD seconds, it has been
 	     associated for MIN_CONNECTED seconds, and it was not steered within
 	     COOLDOWN.
-	  2. It is asked for a beacon report (rrmscan.request) -- clients that can
-	     make one only (rrm capability bits), at most once per REQUEST_GAP.
+	  2. It is asked for a beacon report (rrmscan.request) for its own
+	     sub-band -- clients that can make one only (rrm capability bits) and
+	     that take BSS Transition requests, at most once per REQUEST_GAP.
 	  3. Its answer (rrmscan.harvest's per-station view) names a BSS of this
 	     BSS's 802.11k neighbour list -- the site's other APs on the same SSID
 	     and this AP's other band -- that the client hears DIFF_DB louder than
@@ -22,9 +23,10 @@
 	     imminent", and nothing follows it: a client that stays, stays. This
 	     only tells a client what it could not see for itself.
 
-	A WLAN under the controller's Roaming Assistant is roamassist.lua's and is
-	left out (inform.lua builds the observations), so a client is never
-	steered by both.
+	A WLAN under the controller's Roaming Assistant is roamassist.lua's, and
+	while usteer steers (Band Steering) nothing is steered here at all
+	(inform.lua builds the observations): a client is never pushed by two
+	steerers that disagree, back and forth between the bands.
 ]]--
 
 local M = {}
@@ -75,11 +77,14 @@ end
 -- seen_at}} from its report; nr: this BSS's rrm_nr_list entries.
 function M.pick(obs, heard, nr, own, now, diff_db, floor)
 	diff_db, floor = diff_db or M.DIFF_DB, floor or M.FLOOR
-	-- The client's own reading of this BSS, when its report has one: the same
-	-- receiver as the candidates. Otherwise what hostapd hears from it.
-	local here = obs.signal
+	-- The client's own reading of this BSS, from the same report: the same
+	-- receiver as the candidates. Without it there is no steer -- hostapd's
+	-- reading is the client's uplink at the AP, and an AP transmits louder
+	-- than a phone, so a neighbour as far away as this AP read ~10 dB
+	-- "better" against it.
 	local mine = own and heard[own]
-	if mine and now - mine.seen_at <= M.REPORT_MAX_AGE then here = mine.signal end
+	if not (mine and now - mine.seen_at <= M.REPORT_MAX_AGE) then return nil end
+	local here = mine.signal
 	local best, best_sig
 	for _, e in ipairs(type(nr) == "table" and nr or {}) do
 		local b, hex = type(e) == "table" and e[1], type(e) == "table" and e[3]
@@ -94,6 +99,22 @@ function M.pick(obs, heard, nr, own, now, diff_db, floor)
 	return best
 end
 
+-- The 802.11 operating class of a channel's 20 MHz sub-band (Annex E,
+-- global classes): a beacon request for one class covers only its channels,
+-- so a client on 100 asked for 115 (36-48) reports nothing near it. nil for a
+-- channel this table does not know: no request then, rather than a wrong one.
+function M.op_class(channel, band)
+	local ch = tonumber(channel)
+	if not ch then return nil end
+	if band == "6e" then return (ch >= 1 and ch <= 233) and 131 or nil end
+	if ch >= 1 and ch <= 13 then return 81 end
+	if ch >= 36 and ch <= 48 then return 115 end
+	if ch >= 52 and ch <= 64 then return 118 end
+	if ch >= 100 and ch <= 144 then return 121 end
+	if ch >= 149 and ch <= 165 then return 125 end
+	return nil
+end
+
 -- One heartbeat. observations: {ifname, ssid, mac, signal, connected_sec}
 -- for every client of a WLAN this module may steer. opts.reports: the
 -- per-station view ({[mac] = {[bssid] = {signal, seen_at}}}); opts.request:
@@ -103,7 +124,20 @@ function M.tick(observations, now, opts)
 	opts = opts or {}
 	local reports = opts.reports or {}
 	local sent = 0
-	local nr_cache, capable_cache, own_cache = {}, {}, {}
+	local nr_cache, capable_cache, own_cache, btm_cache = {}, {}, {}, {}
+	-- util.sta_btm per client of a BSS: a client that says it takes no BSS
+	-- Transition request is neither asked for a report nor steered.
+	local function btm_of(ifn, mac)
+		if btm_cache[ifn] == nil then
+			local t = ubus_json("ubus call hostapd." .. ifn .. " get_clients")
+			local set = {}
+			for m, e in pairs(t and type(t.clients) == "table" and t.clients or {}) do
+				if type(m) == "string" then set[m:lower()] = util.sta_btm(e) ~= false end
+			end
+			btm_cache[ifn] = set
+		end
+		return btm_cache[ifn][mac] ~= false
+	end
 	local function nr_of(ifn)
 		if nr_cache[ifn] == nil then
 			local t = ubus_json("ubus call hostapd." .. ifn .. " rrm_nr_list")
@@ -134,6 +168,7 @@ function M.tick(observations, now, opts)
 				local ready = now - cs.below_since >= M.HOLD
 					and (tonumber(o.connected_sec) or 0) >= M.MIN_CONNECTED
 					and (not cs.acted_at or now - cs.acted_at >= M.COOLDOWN)
+					and btm_of(o.ifname, mac)
 				if ready then
 					own_cache[o.ifname] = own_cache[o.ifname] or own_bssid(o.ifname) or false
 					local own = own_cache[o.ifname] or nil
@@ -150,7 +185,7 @@ function M.tick(observations, now, opts)
 						M._log(("%s on %s hears %s at %d dBm, here at %d: asked to move there")
 							:format(mac, o.ifname, best.bssid, best.signal, best.here))
 					elseif (not cs.asked_at or now - cs.asked_at >= M.REQUEST_GAP)
-							and opts.request and capable(o.ifname, mac) then
+							and opts.request and o.op_class and capable(o.ifname, mac) then
 						cs.asked_at = now
 						pcall(opts.request, o.ifname, mac, {op_class = o.op_class})
 					end

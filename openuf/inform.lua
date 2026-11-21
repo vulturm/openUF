@@ -1366,7 +1366,10 @@ function M.build_json(st, cfg, ufhw)
 		local roam_obs = {}
 		-- Client steering (conf.lua client_steering): every other station on
 		-- an ordinary WLAN, decided on after the loop (openuf/clientmatch.lua).
+		-- Not while usteer steers: two steerers that disagree push a client
+		-- back and forth between the bands.
 		local steer_on = cfg and cfg.config and cfg.config.client_steering == true
+			and not M._usteer_steering
 		local steer_obs = {}
 		-- Minimum RSSI: one observation per station on a radio that has it
 		-- on, decided on after the loop (see openuf/minrssi.lua).
@@ -1584,7 +1587,7 @@ function M.build_json(st, cfg, ufhw)
 					steer_obs[#steer_obs + 1] = {
 						ifname = ifname, ssid = vap.essid, mac = sta.mac,
 						signal = sta.signal, connected_sec = sta.connected_sec,
-						op_class = (tonumber(vap.channel) or 0) <= 14 and 81 or 115,
+						op_class = M._clientmatch and M._clientmatch.op_class(vap.channel, vap.radio),
 					}
 				end
 				local prev = M._sta_stats_cache[sta.mac]
@@ -4308,9 +4311,13 @@ function M._push_options_fp(cfg)
 		if v == nil then v = o[2] end
 		parts[i] = o[1] .. "=" .. (v == true and "on" or "off")
 	end
+	-- Read the way the code that uses each one reads it: rf_config takes an
+	-- override only as exactly two letters, either case, so "hk" and "HK" are
+	-- one state and "USA" is none, and neither may cost a push for nothing.
 	for _, k in ipairs(M.PUSH_VALUE_OPTIONS) do
-		local v = c[k]
-		if v ~= nil and tostring(v) ~= "" then parts[#parts + 1] = k .. "=" .. tostring(v) end
+		local v = c[k] ~= nil and tostring(c[k]) or ""
+		if k == "country_override" then v = v:match("^%a%a$") and v:upper() or "" end
+		if v ~= "" then parts[#parts + 1] = k .. "=" .. v end
 	end
 	return table.concat(parts, ";")
 end
@@ -5085,6 +5092,7 @@ function M.handle_response(json_str, st, cfg)
 					local run_bs, run_ra = M._local_steering_gate(vap_table, cfg,
 						steering_active, roam_assist_active)
 					M._usteer.set_enabled(run_bs, cfg, run_ra)
+					M._usteer_steering = (run_bs or run_ra) and true or false
 					M._usteer_filter_next = 0   -- re-check the sync filter next tick
 					if M._backhaul and M._backhaul.pin_parent_channel then
 						pcall(M._backhaul.pin_parent_channel, radio_table, st, ufuci)
@@ -8278,6 +8286,9 @@ function M._rrm_tick(cfg, st)
 	local ok, fresh, reporters, by_sta = pcall(rrm.harvest, blob or "")
 	if ok then
 		M._note_sta_reports(by_sta, now)
+		-- With rrm_enrichment off the collection runs for client steering
+		-- alone, and nothing it hears reaches the controller's scan table.
+		if not enrich_on then fresh = {} end
 		for _, n in ipairs(fresh or {}) do
 			-- Keyed by BSSID so a neighbour two clients both saw is carried
 			-- once, at whichever sighting is freshest.

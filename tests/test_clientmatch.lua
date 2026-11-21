@@ -40,12 +40,12 @@ return {
 			assert_eq(best and best.bssid, U7, "the U7, loudest")
 			assert_eq(best.here, -72, "compared with what the client hears here, not hostapd's -60")
 			heard[OWN] = nil
-			assert_nil(cm.pick({signal = -60}, heard, NR, OWN, now), "hostapd's -60: nobody is 8 dB better")
-			heard = {[U7] = {signal = -55, seen_at = now - cm.REPORT_MAX_AGE - 1}}
+			assert_nil(cm.pick({signal = -90}, heard, NR, OWN, now), "no reading of this BSS in the report: no steer")
+			heard = {[U7] = {signal = -55, seen_at = now - cm.REPORT_MAX_AGE - 1}, [OWN] = {signal = -80, seen_at = now}}
 			assert_nil(cm.pick({signal = -80}, heard, NR, OWN, now), "a stale report is not used")
-			heard = {["00:00:5e:00:53:99"] = {signal = -40, seen_at = now}}
+			heard = {["00:00:5e:00:53:99"] = {signal = -40, seen_at = now}, [OWN] = {signal = -80, seen_at = now}}
 			assert_nil(cm.pick({signal = -80}, heard, NR, OWN, now), "a BSS outside the neighbour list is never named")
-			heard = {[U7] = {signal = -74, seen_at = now}}
+			heard = {[U7] = {signal = -74, seen_at = now}, [OWN] = {signal = -85, seen_at = now}}
 			assert_nil(cm.pick({signal = -85}, heard, NR, OWN, now), "a candidate under FLOOR is no better place")
 		end
 	},
@@ -68,7 +68,8 @@ return {
 				assert_eq(asked[1], "phy1-ap2 a8:db:03:35:45:cc 81", "asked for a 2.4 GHz report")
 				cm.tick(obs(-78), t + 5, opts)
 				assert_eq(#asked, 1, "not again within REQUEST_GAP")
-				reports["a8:db:03:35:45:cc"] = {[U7] = {signal = -55, seen_at = t + 6}}
+				reports["a8:db:03:35:45:cc"] = {[U7] = {signal = -55, seen_at = t + 6},
+					[OWN] = {signal = -77, seen_at = t + 6}}
 				assert_eq(cm.tick(obs(-78), t + 10, opts), 1, "the answer names the U7: steered")
 				assert_contains(sent[1], "bss_transition_request", "a BTM request")
 				assert_contains(sent[1], '"disassociation_imminent":false', "a request, not a kick")
