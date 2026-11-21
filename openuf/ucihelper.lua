@@ -3170,13 +3170,14 @@ function M.apply_config(resp, cfg, opts)
 	-- setparam re-carries the whole config, and reloading the network on each
 	-- one would bounce the uplink -- and with it the inform connection --
 	-- every few seconds.
+	M.handover(before_reload)
 	if M._network_dirty then
 		M._run_cmd("/etc/init.d/network reload 2>/dev/null")
 		M._network_dirty = false
 	end
 
-	-- Reload wireless
-	M.reload_wifi(before_reload)
+	-- Reload wireless (the handover ran above, ahead of the network reload)
+	M.reload_wifi(nil)
 	-- An earlier openUF's own translator veth (LEGACY_FT_VETH_SECTIONS): the
 	-- WLANs that pointed hostapd at it were just rewritten without it, so it
 	-- can go now, and only now.
@@ -3240,6 +3241,7 @@ local FORGET_RADIO_STAMP = {
 function M.forget()
 	local uci = get_uci()
 	local cursor = uci.cursor()
+	local before = M.wifi_snapshot()
 	local radios = {}
 	cursor:foreach("wireless", "wifi-device", function(s)
 		radios[#radios + 1] = s
@@ -3263,6 +3265,8 @@ function M.forget()
 	-- An earlier openUF's own translator veth, if this device still has it:
 	-- a controller's FT WLANs were what used it.
 	M.remove_legacy_ft_veth(cursor)
+	-- The WLANs are going: their clients may as well roam with their keys.
+	M.handover(before)
 	if M._network_dirty then
 		M._run_cmd("/etc/init.d/network reload 2>/dev/null")
 		M._network_dirty = false
@@ -3483,11 +3487,12 @@ local function wireless_status()
 	return status
 end
 
--- `wifi reload`, after asking the clients of every BSS it restarts to roam
--- first (handover.lua). before: handover.snapshot() from ahead of the change.
--- The UCI change is already committed; the reload happens whatever the
--- handover does.
-function M.reload_wifi(before)
+-- Ask the clients of every BSS the coming reload restarts to roam first
+-- (handover.lua). before: handover.snapshot() from ahead of the change, which
+-- is committed by now. Runs ahead of BOTH reloads a push may do: netifd's
+-- `network reload` reads /etc/config/wireless too and restarts what changed
+-- there, so a handover after it moved nobody. Never stops the reload.
+function M.handover(before)
 	local h = M._handover_on and before and get_handover()
 	if h then
 		local ok, err = pcall(function()
@@ -3499,6 +3504,11 @@ function M.reload_wifi(before)
 		end)
 		if not ok then io.stderr:write("openuf: handover failed: " .. tostring(err) .. "\n") end
 	end
+end
+
+-- `wifi reload`, after the handover above when given the snapshot.
+function M.reload_wifi(before)
+	M.handover(before)
 	M._run_cmd("wifi reload")
 	-- Whatever a pass cached about the interfaces is the pre-reload set.
 	M._ws_cache = nil
@@ -3856,16 +3866,19 @@ function M.backhaul_set_uplink_enabled(enabled)
 	local uci = get_uci()
 	local cursor = uci.cursor()
 	local changed = false
+	local before = nil
 	for _, s in ipairs(M.backhaul_uplink_sections()) do
 		local want = enabled and "0" or "1"
 		if (s.disabled and "1" or "0") ~= want then
+			before = before or M.wifi_snapshot()
 			cursor:set("wireless", s.name, "disabled", want)
 			changed = true
 		end
 	end
 	if changed then
 		cursor:commit("wireless")
-		M._run_cmd("wifi reload")
+		-- The station shares its radio with the APs, which restart with it.
+		M.reload_wifi(before)
 	end
 	return changed
 end
