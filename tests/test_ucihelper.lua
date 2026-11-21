@@ -1385,14 +1385,12 @@ return {
 					c:set("wireless", name, "ssid", v[1])
 					c:set("wireless", name, "openuf_minrate", v[2])
 				end
-				local orig_ifs, orig_open = ucihelper.ifname_for_section, io.open
+				local orig_ifs, orig_read = ucihelper.ifname_for_section, ucihelper._read_file
 				ucihelper.ifname_for_section = function(sec) return ({g1 = "phy0-ap1", m1 = "phy0-ap0"})[sec] end
 				local idx = "7"
-				io.open = function(path, mode)
-					if path:match("^/sys/class/net/.*/ifindex$") then
-						return {read = function() return idx end, close = function() end}
-					end
-					return orig_open(path, mode)
+				ucihelper._read_file = function(path)
+					if path:match("^/sys/class/net/.*/ifindex$") then return idx .. "\n" end
+					return orig_read(path)
 				end
 				ucihelper._masks = {}
 				local ok, err = pcall(function()
@@ -1428,7 +1426,7 @@ return {
 					ucihelper.apply_rate_masks()
 					assert_contains(table.concat(cmds, "\n", before + 1), "iw dev phy0-ap1 set bitrates >", "the floor gone: mask cleared")
 				end)
-				ucihelper.ifname_for_section, io.open = orig_ifs, orig_open
+				ucihelper.ifname_for_section, ucihelper._read_file = orig_ifs, orig_read
 				ucihelper._masks, ucihelper._mask_failed = {}, {}
 				if not ok then error(err, 0) end
 			end)
