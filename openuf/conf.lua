@@ -259,6 +259,15 @@ config = {
 	-- without 802.11v are dropped by the reload as before. Read at each push.
 	handover_before_reload = true,
 
+	-- Steer a client that stays on a weak signal here to the AP it hears
+	-- clearly better (Aruba's ClientMatch, with 802.11k and 802.11v): one
+	-- under -70 dBm for 20 s is asked for a beacon report, and when it hears
+	-- a BSS of this one's 802.11k neighbour list 8 dB louder it gets a BSS
+	-- Transition request naming it -- a request, never a disconnect. Only
+	-- WLANs without the controller's Roaming Assistant, and only clients that
+	-- can make a beacon report. Off by default.
+	client_steering = false,
+
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->
 	-- Device Authentication). true creates the site's device login on this
 	-- AP with the password the controller pushes (as a hash), and removes it

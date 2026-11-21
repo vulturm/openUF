@@ -7156,6 +7156,27 @@ return {
 		end
 	},
 	{
+		name = "inform: each station's beacon reports are kept for client steering, and dropped when old",
+		fn = function()
+			local o = inform._sta_reports
+			inform._sta_reports = {}
+			local ok, err = pcall(function()
+				inform._note_sta_reports({["a8:db:03:35:45:cc"] = {["b2:9c:6c:b8:ab:7f"] = {signal = -55, seen_at = 100}}}, 100)
+				inform._note_sta_reports({["a8:db:03:35:45:cc"] = {["8e:78:48:06:03:fc"] = {signal = -60, seen_at = 200}}}, 200)
+				local mine = inform._sta_reports["a8:db:03:35:45:cc"]
+				assert_true(mine["b2:9c:6c:b8:ab:7f"] ~= nil and mine["8e:78:48:06:03:fc"] ~= nil, "merged")
+				inform._note_sta_reports(nil, 100 + inform.STA_REPORT_KEEP + 1)
+				mine = inform._sta_reports["a8:db:03:35:45:cc"]
+				assert_nil(mine["b2:9c:6c:b8:ab:7f"], "the old sighting goes")
+				assert_true(mine["8e:78:48:06:03:fc"] ~= nil, "the newer one stays")
+				inform._note_sta_reports(nil, 200 + inform.STA_REPORT_KEEP + 1)
+				assert_nil(inform._sta_reports["a8:db:03:35:45:cc"], "a station with nothing left goes")
+			end)
+			inform._sta_reports = o
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: _tick replays the last push once every WLAN a plugin needed the BSSID of is up, or the settle time ran out",
 		fn = function()
 			with_tick_env(function()

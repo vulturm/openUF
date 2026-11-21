@@ -53,6 +53,7 @@ local nrlist    = _require_sibling("nrlist")
 local devlogin  = _require_sibling("devlogin")
 local l2guard   = _require_sibling("l2guard")
 local roamassist = _require_sibling("roamassist")
+local clientmatch = _require_sibling("clientmatch")
 local airtime   = _require_sibling("airtime")
 local mcsnoop   = _require_sibling("mcsnoop")
 local backhaul  = _require_sibling("backhaul")
@@ -105,6 +106,7 @@ M._devlogin   = devlogin
 if remotelog then remotelog._crypto = crypto end
 M._l2guard    = l2guard
 M._roamassist = roamassist
+M._clientmatch = clientmatch
 M._airtime    = airtime
 M._mcsnoop    = mcsnoop
 M._backhaul   = backhaul
@@ -1362,6 +1364,10 @@ function M.build_json(st, cfg, ufhw)
 		-- Roaming Assistant: one observation per station on a vap that has
 		-- it on, decided on after the loop (see openuf/roamassist.lua).
 		local roam_obs = {}
+		-- Client steering (conf.lua client_steering): every other station on
+		-- an ordinary WLAN, decided on after the loop (openuf/clientmatch.lua).
+		local steer_on = cfg and cfg.config and cfg.config.client_steering == true
+		local steer_obs = {}
 		-- Minimum RSSI: one observation per station on a radio that has it
 		-- on, decided on after the loop (see openuf/minrssi.lua).
 		local minrssi_obs = {}
@@ -1571,6 +1577,14 @@ function M.build_json(st, cfg, ufhw)
 						ifname = ifname, ssid = vap.essid, mac = sta.mac,
 						signal = sta.signal, connected_sec = sta.connected_sec,
 						threshold = vap.roam_assist_rssi,
+					}
+				elseif steer_on and not below_minrssi and sta.signal then
+					-- The beacon request's operating class follows the BSS's
+					-- band, as _rrm_tick's does: 81 on 2.4 GHz, 115 on 5 GHz.
+					steer_obs[#steer_obs + 1] = {
+						ifname = ifname, ssid = vap.essid, mac = sta.mac,
+						signal = sta.signal, connected_sec = sta.connected_sec,
+						op_class = (tonumber(vap.channel) or 0) <= 14 and 81 or 115,
 					}
 				end
 				local prev = M._sta_stats_cache[sta.mac]
@@ -1854,6 +1868,13 @@ function M.build_json(st, cfg, ufhw)
 				 on_steer = M._assoctrack and function(mac)
 					M._assoctrack.note_kick(mac, M._assoctrack.KICK_ROAM_ASSIST)
 				 end})
+		end
+		if M._clientmatch and #steer_obs > 0 then
+			local rrm = M._rrmscan
+			pcall(M._clientmatch.tick, steer_obs, now, {
+				reports = M._sta_reports,
+				request = rrm and rrm.request, capable = rrm and rrm.capable_stations,
+			})
 		end
 		if M._assoctrack then pcall(M._assoctrack.observe, here_obs, uptime) end
 		-- Each radio's WiFi Experience, beside its channel utilisation in
@@ -8104,6 +8125,26 @@ function M._events_pending(rrm)
 	return (tonumber(size) or 0) > 0
 end
 
+-- What each station heard in its last beacon reports (rrmscan.harvest's
+-- third value), for clientmatch.lua: {[mac] = {[bssid] = {signal, seen_at}}}.
+-- Kept a few minutes at most; a steer needs a fresh answer anyway.
+M._sta_reports = {}
+M.STA_REPORT_KEEP = 300
+function M._note_sta_reports(by_sta, now)
+	for sta, heard in pairs(type(by_sta) == "table" and by_sta or {}) do
+		local mine = M._sta_reports[sta] or {}
+		for bssid, rec in pairs(heard) do mine[bssid] = rec end
+		M._sta_reports[sta] = mine
+	end
+	for sta, heard in pairs(M._sta_reports) do
+		local any = false
+		for bssid, rec in pairs(heard) do
+			if now - (rec.seen_at or 0) > M.STA_REPORT_KEEP then heard[bssid] = nil else any = true end
+		end
+		if not any then M._sta_reports[sta] = nil end
+	end
+end
+
 -- One cycle of the client-assisted enrichment: keep the notification
 -- collector alive, fold in whatever clients have reported since last time,
 -- expire what the controller would discard anyway, and -- at most every
@@ -8125,6 +8166,11 @@ function M._rrm_tick(cfg, st)
 	-- upgrades, so every device installed before this option existed has no
 	-- such key -- AP2 was exactly that, and the collector never started.
 	local rrm_on   = cfg.config.rrm_enrichment ~= false
+	-- Client steering (clientmatch.lua) reads the same beacon reports, so the
+	-- collector and the harvest run for it too; the periodic requests below
+	-- stay rrm_enrichment's.
+	local enrich_on = rrm_on
+	rrm_on = rrm_on or cfg.config.client_steering == true
 	local assoc_on = M._assoc_enabled(st, cfg)
 	M._roam_fast, M._roam_st = assoc_on and rrm.drain ~= nil, st
 	M._roam_keep = rrm_on and true or false
@@ -8229,8 +8275,9 @@ function M._rrm_tick(cfg, st)
 	-- `blob or ""`, never a bare nil: harvest drains the file itself when it is
 	-- handed nothing, which would undo the size gate above (and re-read a file
 	-- a failed drain has already emptied).
-	local ok, fresh, reporters = pcall(rrm.harvest, blob or "")
+	local ok, fresh, reporters, by_sta = pcall(rrm.harvest, blob or "")
 	if ok then
+		M._note_sta_reports(by_sta, now)
 		for _, n in ipairs(fresh or {}) do
 			-- Keyed by BSSID so a neighbour two clients both saw is carried
 			-- once, at whichever sighting is freshest.
@@ -8269,7 +8316,7 @@ function M._rrm_tick(cfg, st)
 	table.sort(live, function(a, b) return a.bssid < b.bssid end)
 	M._rrm_neighbours = live
 
-	if now < M._rrm_next_request then return true end
+	if not enrich_on or now < M._rrm_next_request then return true end
 	M._rrm_next_request = now +
 		(tonumber(cfg.config.rrm_request_interval) or M.RRM_REQUEST_INTERVAL)
 
