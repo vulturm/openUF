@@ -225,7 +225,12 @@
 				? fact('Controller', ctl.host + (ctl.port && ctl.port !== 8080 ? ':' + ctl.port : ''), { mono: true })
 				: fact('Controller', 'Not set', { sub: 'Looking for a host named “unifi”' }),
 			fact('Last contact', contact || (p.adopted ? 'Not yet' : '—'), { sub: p.last_failure && p.last_failure > (p.last_contact || 0) ? 'Last attempt failed ' + ago(p.now, p.last_failure) : null }),
-			fact('Uptime', p.uptime != null ? duration(p.uptime) : '—', { sub: p.version ? 'openUF ' + p.version : null })
+			fact('Uptime', p.uptime != null ? duration(p.uptime) : '—', { sub: p.version ? 'openUF ' + p.version : null }),
+			// Counts per band only, from the daemon's own heartbeat; absent
+			// when Local Settings hide it.
+			p.clients ? fact('Clients', String(Object.values(p.clients).reduce((a, b) => a + b, 0)), {
+				sub: Object.keys(p.clients).sort().map(b => p.clients[b] + ' on ' + ({ ng: '2.4 GHz', na: '5 GHz', '6e': '6 GHz' }[b] || b)).join(' · ')
+			}) : null
 		);
 		$('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	}
@@ -244,7 +249,7 @@
 	let sid = sessionStorage.getItem(SID_KEY);
 	let settings = null;     // { status, presets, values }
 	let draft = {};          // option -> pending value
-	const WEB_OPTS = ['portal'];
+	const WEB_OPTS = ['portal', 'public_clients'];
 
 	function signOut(reason) {
 		if (sid) ubus(sid, 'session', 'destroy', {}).catch(() => {});
@@ -634,7 +639,8 @@
 
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'This page'),
-			row('Show this page instead of LuCI', 'When off, the device\'s address opens OpenWrt\'s LuCI interface as before.', toggle('portal', '1'), { inline: true })
+			row('Show this page instead of LuCI', 'When off, the device\'s address opens OpenWrt\'s LuCI interface as before.', toggle('portal', '1'), { inline: true }),
+			row('Show the client count without signing in', 'How many clients are connected on each band, on the page anyone on the network can open. Counts only, never names or addresses.', toggle('public_clients', '1'), { inline: true })
 		));
 
 		groups.push(h('div', { class: 'group card' },

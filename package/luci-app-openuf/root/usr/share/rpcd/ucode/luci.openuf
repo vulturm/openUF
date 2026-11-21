@@ -115,6 +115,19 @@ function public_status() {
 	const up = first_line('/proc/uptime');
 	const url = st.inform_url ?? s.config?.inform_url;
 	const ctl = inform_host(url);
+	// Clients per band, from the daemon's status file (clients=ng:3,na:1):
+	// read with the rest of it, inside this cache, so no visitor ever costs
+	// a hostapd query. Counts only, never an address. Hidden with
+	// openuf.web.public_clients = 0.
+	let clients = null;
+	if (cursor().get('openuf', 'web', 'public_clients') != '0' && type(h.clients) == 'string') {
+		clients = {};
+		for (let p in split(h.clients, ',')) {
+			const kv = split(p, ':');
+			if (length(kv) == 2 && match(kv[0], /^[a-z0-9]+$/) && match(kv[1], /^[0-9]+$/))
+				clients[kv[0]] = int(kv[1]);
+		}
+	}
 
 	public_cache = {
 		hostname: sys.hostname ?? null,
@@ -129,6 +142,7 @@ function public_status() {
 		last_failure: h.last_fail ?? null,
 		now: s.now ?? time(),
 		uptime: up ? int(split(up, ' ')[0]) : null,
+		clients: clients,
 		running: shell_ok('/etc/init.d/openuf running')
 	};
 	public_at = time();
