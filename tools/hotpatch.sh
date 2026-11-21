@@ -16,6 +16,15 @@
 # left alone, /etc/init.d/openuf is replaced when the tree's copy differs (its
 # backup lives inside the tree), and a BUILD stamp names this checkout. A lab tool: it writes into
 # a package-managed tree, so `apk fix openuf` (or a reinstall) is the way back.
+#
+# Where luci-app-openuf is installed, its pages and rpcd backend follow too
+# (package/luci-app-openuf: htdocs -> /www, root -> /), the files that differ,
+# backed up under <tree>/.pre-hotpatch-luci/ -- NOT beside them: rpcd loads
+# every file in /usr/share/rpcd/ucode/, and a luci.openuf.pre-hotpatch there
+# is a second backend of the same name. uci-defaults stay out (run once, at
+# install). Without this a portal change never reached the AP: hotpatch had
+# shipped openuf/ only, and the new options were missing from the page.
+# `apk fix luci-app-openuf` is the way back for these.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 [ -f openuf/inform.lua ] || { echo "run from the repository root" >&2; exit 2; }
@@ -25,7 +34,8 @@ HOST=${1:-}; [ -n "$HOST" ] || { echo "usage: sh tools/hotpatch.sh [--repush] <h
 
 SSH_COMMON="-o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR"
 ASKPASS=""
-cleanup() { [ -n "$ASKPASS" ] && rm -f "$ASKPASS"; return 0; }
+STAGE=""
+cleanup() { [ -n "$ASKPASS" ] && rm -f "$ASKPASS"; [ -n "$STAGE" ] && rm -rf "$STAGE"; return 0; }
 trap cleanup EXIT
 if [ -n "${OPENUF_SSH_PASS:-}" ]; then
 	ASKPASS=$(mktemp "${TMPDIR:-/tmp}/openuf-askpass.XXXXXX") || exit 1
@@ -96,4 +106,32 @@ COPYFILE_DISABLE=1 tar -C build/openuf -cf - \
 	/etc/init.d/openuf restart
 	i=0; while [ \$i -lt 20 ]; do sleep 3; ok=\$(grep -m1 last_ok /tmp/openuf-status 2>/dev/null | cut -d= -f2); [ \"\${ok:-0}\" -gt \$(( \$(date +%s) - 25 )) ] && break; i=\$((i+1)); done
 	grep -E 'last_ok|last_type|build' /tmp/openuf-status 2>/dev/null || echo '  (no status yet)'" || { echo "$HOST: hotpatch failed" >&2; exit 1; }
+
+# The web UI, from the source tree (the package build minifies the JS; the
+# source runs the same), staged as the AP lays it out: htdocs under www/,
+# root as it is. One tar, compared and copied on the AP.
+L=package/luci-app-openuf
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/openuf-luci.XXXXXX") || exit 1
+mkdir -p "$STAGE/www"
+cp -R "$L/htdocs/." "$STAGE/www/" && cp -R "$L/root/." "$STAGE/" || { echo "could not stage $L" >&2; exit 1; }
+rm -rf "$STAGE/etc/uci-defaults"
+COPYFILE_DISABLE=1 tar -C "$STAGE" -cf - --exclude='.DS_Store' --exclude='._*' . \
+| $SSH "root@$HOST" "set -e
+	if [ ! -f /usr/share/rpcd/ucode/luci.openuf ] && [ ! -f /www/openuf/index.html ]; then
+		cat >/dev/null; echo '  web UI: luci-app-openuf is not installed, left alone'; exit 0
+	fi
+	B='$DIR/.pre-hotpatch-luci'; T=\$(mktemp -d /tmp/openuf-hotpatch-luci.XXXXXX); tar -C \"\$T\" -xf -
+	changed=0; rpcd=0
+	for f in \$(cd \"\$T\" && find . -type f | sed 's|^\./||'); do
+		if [ -f \"/\$f\" ] && cmp -s \"\$T/\$f\" \"/\$f\"; then continue; fi
+		if [ -f \"/\$f\" ] && [ ! -f \"\$B/\$f\" ]; then mkdir -p \"\$B/\$(dirname \"\$f\")\"; cp \"/\$f\" \"\$B/\$f\"; fi
+		mkdir -p \"/\$(dirname \"\$f\")\"; cp \"\$T/\$f\" \"/\$f\"; changed=\$((changed+1)); echo \"  updated /\$f\"
+		case \"\$f\" in usr/share/rpcd/*) rpcd=1 ;; esac
+	done
+	rm -rf \"\$T\"
+	echo \"  web UI: \$changed file(s) changed\"
+	# rpcd reads its ACLs and ucode backends at start; LuCI caches its menu.
+	[ \$rpcd = 1 ] && /etc/init.d/rpcd reload && echo '  rpcd reloaded'
+	[ \$changed -gt 0 ] && rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null
+	exit 0" || { echo "$HOST: the web UI update failed (the daemon is patched)" >&2; exit 1; }
 echo "$HOST: done"
