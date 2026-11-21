@@ -431,7 +431,7 @@ end
 -- (hostapd's own status "DFS") is not a stall.
 M.STALL_TICKS = 3
 M._stall_ticks = 0
-M.ap_stall = nil       -- {radio, channel, reason = "dfs"|"unknown", dfs_state}
+M.ap_stall = nil       -- {radio, channel, reason = "dfs"|"unknown"|"cac", ...}
 
 -- Every AP-type interface of phy (e.g. "phy0") in `iw dev` output, and which of
 -- them beacon: iw prints an `ssid` line only for a started AP. AP/VLAN
@@ -489,16 +489,14 @@ function M.check_ap_stall(sta_if, radio)
 	local freq = link:match("Connected to") and tonumber(link:match("freq:%s*(%d+)"))
 	local phy = (M._read_file("/sys/class/net/" .. sta_if .. "/phy80211/name") or ""):match("^(phy%d+)")
 	local aps = (freq and phy) and M.phy_aps(M._popen("iw dev"), phy) or {}
+	-- Silent: no AP beaconing, and none in a CAC either. A CAC in progress is
+	-- what a DFS start should look like: the AP holds a channel (iw prints
+	-- `channel`) but has no `ssid` yet. Not hostapd's ubus status: its
+	-- hostapd.<if> object is gone for the whole CAC (seen on the hAP ac), and
+	-- the stalled AP holds no channel at all.
 	local silent = #aps > 0
 	for _, a in ipairs(aps) do
-		if a.beaconing then silent = false end
-	end
-	-- A CAC in progress is what a DFS start should look like: the AP holds a
-	-- channel (iw prints `channel`) but has no `ssid` yet. Not hostapd's ubus
-	-- status: its hostapd.<if> object is gone for the whole CAC (seen on the
-	-- hAP ac), and the stalled AP holds no channel at all.
-	for _, a in ipairs(aps) do
-		if a.tuned and not a.beaconing then silent = false end
+		if a.beaconing or a.tuned then silent = false end
 	end
 	if not silent then
 		if M.ap_stall then

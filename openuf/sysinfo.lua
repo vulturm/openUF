@@ -1122,9 +1122,9 @@ function M.regdomains(text)
 		if line:match("^global") then
 			section = "global"
 		else
-			local phy = line:match("^(phy)#(%d+)")
-			if phy then
-				section = "phy" .. line:match("^phy#(%d+)")
+			local n = line:match("^phy#(%d+)")
+			if n then
+				section = "phy" .. n
 			else
 				local cc = line:match("^country (%w%w):")
 				if cc and section then
