@@ -5015,6 +5015,9 @@ Wiphy phy2
 					.. " UniFi neighbour lists this BSS in operating class 0")
 				assert_nil(db.wireless.radio2.ieee80211d,
 					"a radio no WLAN carried the key for is left alone")
+				assert_eq(db.wireless.radio3.country3, "0x04",
+					"the global operating-class table, as UniFi beacons it")
+				assert_nil(db.wireless.radio2.country3, "left alone with it")
 			end)
 		end
 	},

@@ -1984,8 +1984,16 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 	-- reload). An explicit 1, not a delete: it also repairs a radio an
 	-- earlier openUF left at 0. No guard on a country is needed: hostapd.uc
 	-- emits ieee80211d only for a radio with a country.
+	--
+	-- With the third octet of the country string at 0x04, as UniFi writes it:
+	-- the element then names the global operating classes (802.11 Annex E,
+	-- table E-4). With OpenWrt's default (a space, "any environment") a UniFi
+	-- AP read the element against the country's own table and listed this
+	-- BSS as op12, the US class for 2.4 GHz, where its UniFi neighbours on
+	-- the same band had 81.
 	if country_beacon ~= nil then
 		cursor:set("wireless", radio, "ieee80211d", "1")
+		cursor:set("wireless", radio, "country3", "0x04")
 	end
 	-- Auto-channel narrowing (the site's Radio settings, see
 	-- _parse_wifi_system_cfg). Both land on wifi-device options that only
