@@ -369,6 +369,10 @@ end
 local function channel_of(freq)
 	if not freq then return nil end
 	if freq == 2484 then return 14 end
+	-- 6 GHz numbers its channels from 5950: (5975 - 5000) / 5 = 195 is no
+	-- channel at all, and pinning it into UCI would keep the radio dark. Not
+	-- followed: nil, the radio stays as the controller planned it.
+	if freq >= 5925 then return nil end
 	if freq >= 5000 then return math.floor((freq - 5000) / 5) end
 	if freq >= 2407 then return math.floor((freq - 2407) / 5) end
 	return nil
@@ -500,7 +504,12 @@ function M.check_ap_stall(sta_if, radio)
 	end
 	if not silent then
 		if M.ap_stall then
-			M._log(("%s: the APs are on the air again (channel %s)")
+			local beaconing = false
+			for _, a in ipairs(aps) do
+				if a.beaconing then beaconing = true end
+			end
+			M._log((beaconing and "%s: the APs are on the air again (channel %s)"
+				or "%s: hostapd is running a CAC on channel %s, the APs follow when it ends")
 				:format(tostring(M.ap_stall.radio), tostring(channel_of(freq) or "?")))
 		end
 		M._stall_ticks, M.ap_stall = 0, nil
@@ -571,10 +580,14 @@ local function cac_finish(st, ok, why)
 	M._dirty = true
 	if ok then
 		st.backhaul_cac_rejoined = M._now()
-		M.ap_stall = nil
 	else
 		st.backhaul_cac_fails = (tonumber(st.backhaul_cac_fails) or 0) + 1
 	end
+	-- Either way the job's {reason = "cac"} goes: left behind after a failure,
+	-- check_ap_stall handed it back unchanged, cac_start refused it (not
+	-- "dfs"), so there was never another attempt and the status file said a
+	-- CAC was running. The next heartbeats diagnose the stall afresh.
+	M.ap_stall, M._stall_ticks = nil, 0
 	M._log(("%s: %s%s"):format(tostring(job and job.radio), why,
 		ok and "" or (" -- next attempt in " .. math.floor(M.cac_backoff(st.backhaul_cac_fails) / 60) .. " min")))
 end
@@ -615,6 +628,10 @@ function M.cac_start(st, cfg, ufuci, stall)
 	if rejoined and now - rejoined < M.HOLD then
 		st.backhaul_cac_fails = (tonumber(st.backhaul_cac_fails) or 0) + 1
 		M._log(("%s: the cleared channel did not hold"):format(tostring(stall.radio)))
+	elseif rejoined then
+		-- The last clearing held: the failures before it say nothing about
+		-- this stall, and kept every later one waiting up to RETRY_MAX.
+		st.backhaul_cac_fails = 0
 	end
 	st.backhaul_cac_rejoined = nil
 	local last = tonumber(st.backhaul_cac_last)
@@ -656,10 +673,41 @@ function M.pin_parent_channel(radio_table, st, ufuci)
 	for _, r in ipairs(radio_table or {}) do
 		if r.name == radio then
 			r.channel = chan
+			-- The controller's width was planned for its channel, not the
+			-- parent's: 36/VHT80 pinned to 165 is an 80 MHz block that does
+			-- not exist there, and hostapd does not start the APs.
+			local max = M.max_width_5g(chan)
+			local kind = type(r.htmode) == "string" and r.htmode:match("^(%u+)%d+$")
+			if max and kind and ufuci.cap_htmode then
+				local capped, from = ufuci.cap_htmode(r.htmode, kind .. max)
+				if from then
+					M._log(("%s: %s does not fit the parent's channel %d -- %s"):format(radio, from, chan, capped))
+					r.htmode = capped
+				end
+			end
 			return radio
 		end
 	end
 	return nil
+end
+
+-- The widest channel a 5 GHz channel number sits in, in MHz, from the
+-- 802.11 channelisation (the blocks every regulatory domain uses), or nil
+-- for a channel outside it (2.4 GHz: left alone). 165 and 169-177 have no
+-- 40 MHz partner in most domains.
+local BLOCK80  = {36, 52, 100, 116, 132, 149}
+local BLOCK160 = {36, 100}
+function M.max_width_5g(chan)
+	chan = tonumber(chan)
+	if not chan or chan < 36 or chan > 177 then return nil end
+	for _, b in ipairs(BLOCK160) do
+		if chan >= b and chan <= b + 28 then return 160 end
+	end
+	for _, b in ipairs(BLOCK80) do
+		if chan >= b and chan <= b + 12 then return 80 end
+	end
+	if chan <= 161 then return 40 end
+	return 20
 end
 
 -- The parent device behind a downlink BSSID: the controller's priority-1
