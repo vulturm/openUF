@@ -727,4 +727,69 @@ return {
 				"no parent channel learnt yet")
 		end
 	},
+	{
+		name = "backhaul: pin_parent_channel() narrows the pushed width to what the parent's channel has",
+		fn = function()
+			local uf = fake_ufuci({{name = "openuf_bh_ul_radio0", radio = "radio0", disabled = false}}, "phy0-sta0")
+			uf.cap_htmode = dofile("openuf/ucihelper.lua").cap_htmode
+			local o_log = backhaul._log
+			local logged = {}
+			backhaul._log = function(m) logged[#logged + 1] = m end
+			local rt = {{name = "radio0", channel = 36, htmode = "VHT80"}}
+			backhaul.pin_parent_channel(rt, {backhaul_mode = "wireless", backhaul_parent_channel = 165}, uf)
+			assert_eq(rt[1].htmode, "VHT20", "165 has no 80 MHz block")
+			assert_contains(logged[1] or "", "VHT80", "and says so")
+			rt = {{name = "radio0", channel = 36, htmode = "VHT80"}}
+			backhaul.pin_parent_channel(rt, {backhaul_mode = "wireless", backhaul_parent_channel = 124}, uf)
+			assert_eq(rt[1].htmode, "VHT80", "124 sits in 116-128: kept")
+			rt = {{name = "radio0", channel = 36, htmode = "HE160"}}
+			backhaul.pin_parent_channel(rt, {backhaul_mode = "wireless", backhaul_parent_channel = 149}, uf)
+			assert_eq(rt[1].htmode, "HE80", "149 has 80, not 160")
+			backhaul._log = o_log
+			assert_eq(backhaul.max_width_5g(40), 160, "36-64")
+			assert_eq(backhaul.max_width_5g(144), 80, "132-144")
+			assert_eq(backhaul.max_width_5g(161), 80, "149-161")
+			assert_eq(backhaul.max_width_5g(165), 20, "165 alone")
+			assert_nil(backhaul.max_width_5g(6), "2.4 GHz: not judged")
+		end
+	},
+	{
+		name = "backhaul: a failed CAC leaves no stale stall behind, and a clearing that held resets the backoff",
+		fn = function()
+			local o = {backhaul._popen, backhaul._log, backhaul._exec, backhaul._now}
+			local now = 9000
+			backhaul._now = function() return now end
+			backhaul._exec = function() return 0 end
+			backhaul._log = function() end
+			backhaul._popen = function() return "phy#0\n\tInterface phy0-ap0\n\t\ttype AP\n" end
+			local uf = {radio_channel = function() return "124" end}
+			local st = {backhaul_mode = "wireless", backhaul_cac_fails = 3}
+			local cfg = {config = {dfs_cac_recover = true}}
+			local stall = {radio = "radio0", channel = 124, reason = "dfs", phy = "phy0", ifname = "phy0-ap0"}
+			-- A clearing that held past HOLD: the earlier failures are forgotten.
+			st.backhaul_cac_rejoined = now - backhaul.HOLD - 1
+			assert_true(backhaul.cac_start(st, cfg, uf, stall), "started without the inflated backoff")
+			assert_eq(st.backhaul_cac_fails, 0, "the failures before a held clearing reset")
+			now = now + backhaul.CAC_MAX + 1
+			assert_false(backhaul.cac_step(st), "failed")
+			assert_nil(backhaul.ap_stall, "no {reason = cac} left behind")
+			assert_eq(backhaul._stall_ticks, 0, "the stall is diagnosed afresh")
+			backhaul._popen, backhaul._log, backhaul._exec, backhaul._now = o[1], o[2], o[3], o[4]
+		end
+	},
+	{
+		name = "backhaul: follow_parent_channel() does not pin a 6 GHz parent's frequency as a 5 GHz channel",
+		fn = function()
+			local o_popen, o_log = backhaul._popen, backhaul._log
+			backhaul._popen = function() return "Connected to 00:00:5e:00:53:80 (on phy0-sta0)\n\tfreq: 5975.0\n" end
+			backhaul._log = function() end
+			backhaul._chan_seen, backhaul._chan_ticks = nil, 0
+			local sets = 0
+			local uf = {radio_channel = function() return "36" end,
+				set_radio_channel = function() sets = sets + 1 end}
+			for _ = 1, 3 do backhaul.follow_parent_channel({}, uf, "phy0-sta0", "radio0") end
+			backhaul._popen, backhaul._log = o_popen, o_log
+			assert_eq(sets, 0, "no channel 195 written")
+		end
+	},
 }
