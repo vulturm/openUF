@@ -1021,22 +1021,6 @@ end
 local CCK_RATES  = {1000, 2000, 5500, 11000}
 local OFDM_RATES = {6000, 9000, 12000, 18000, 24000, 36000, 48000, 54000}
 
--- Derive a radio's UCI rate options from a Minimum Data Rate floor.
---
--- floor_kbps:    the minimum data rate, in kb/s (wireless.<n>.minrate_data)
--- allow_cck:     whether 802.11b/CCK rates stay on the ladder at all
---                (wireless.<n>.minrate_cck_rates.status)
--- drop_below:    whether rates under the floor are also removed from the
---                advertised set, not merely made non-basic
---                (wireless.<n>.minrate_below_disable)
---
--- basic_rate is what actually enforces a *minimum*: a station must support
--- every basic rate to associate at all, so making the floor basic excludes
--- anything slower. supported_rates additionally stops the lower rates being
--- advertised, which is the separate "advertising rates" sub-toggle.
---
--- Returns nil when the floor excludes every rate in the band, rather than
--- emitting an empty list that would leave hostapd unable to bring the BSS up.
 -- The radio's basic (mandatory) rates for the STRICTEST floor among its
 -- WLANs. hostapd's basic rates are the radio's, while the controller sets a
 -- floor per WLAN; each WLAN's own floor is then a per-netdev TX mask
@@ -1106,6 +1090,23 @@ function M.rate_mask_for(floor_kbps, band, cck, basic)
 	return out
 end
 
+-- Derive a radio's UCI rate options from a Minimum Data Rate floor.
+--
+-- floor_kbps:    the minimum data rate, in kb/s (wireless.<n>.minrate_data)
+-- allow_cck:     whether 802.11b/CCK rates stay on the ladder at all
+--                (wireless.<n>.minrate_cck_rates.status)
+-- drop_below:    whether rates under the floor are also removed from the
+--                advertised set, not merely made non-basic
+--                (wireless.<n>.minrate_below_disable)
+--
+-- basic_rate is basic_for(floor) -- right for a radio with one WLAN;
+-- apply_config replaces it with basic_for of the radio's STRICTEST floor.
+-- What keeps a WLAN's slower stations out is its own TX mask
+-- (rate_mask_for); supported_rates additionally stops the lower rates being
+-- advertised, which is the separate "advertising rates" sub-toggle.
+--
+-- Returns nil when the floor excludes every rate in the band, rather than
+-- emitting an empty list that would leave hostapd unable to bring the BSS up.
 function M.derive_rates(floor_kbps, allow_cck, drop_below)
 	if not floor_kbps then return nil end
 	local ladder = {}
@@ -2287,14 +2288,16 @@ function M.apply_config(resp, cfg, opts)
 	local cpueth = cfg and cfg.net and cfg.net.lan_cpueth
 
 	-- "Minimum Data Rate" arrives per WLAN but OpenWrt's rate options are
-	-- per radio, so every VAP sharing a radio has to collapse to one setting.
-	-- The aggregate is deliberately the most PERMISSIVE of them: the lowest
-	-- floor, CCK still allowed if any WLAN allows it, and lower rates only
-	-- dropped from the advertised set if every WLAN asked for that. Erring
-	-- the other way would apply one WLAN's stricter floor to a co-hosted WLAN
-	-- and lock out clients the controller fully intended to admit -- a
-	-- silent, on-air-only failure. VAPs with no floor (the key is absent
-	-- whenever that band's control is off) contribute nothing.
+	-- per radio, so every VAP sharing a radio collapses to one setting, plus
+	-- a per-WLAN TX mask (apply_rate_masks) for each WLAN's own floor. The
+	-- advertised set is the most PERMISSIVE of them: the lowest floor, CCK
+	-- still allowed if any WLAN allows it, and lower rates only dropped if
+	-- every WLAN asked for that -- erring the other way would hide rates a
+	-- co-hosted WLAN's clients need, a silent, on-air-only failure. The basic
+	-- rates are the exception: those of the STRICTEST floor (basic_for), as
+	-- the kernel refuses a TX mask holding none of them. VAPs with no floor
+	-- (the key is absent whenever that band's control is off) contribute
+	-- nothing.
 	-- "Force WiFi 4 Mode" is per WLAN but htmode is per RADIO, so a radio
 	-- carrying any such WLAN cannot also be raised to HE by a board
 	-- htmode_floor -- see rf_config. Collected here, before the radio loop,
@@ -2305,7 +2308,7 @@ function M.apply_config(resp, cfg, opts)
 	-- (it rides the radio's beacons, which every BSS on it shares), so the
 	-- per-BSS wire key has to collapse to one setting per radio. The
 	-- aggregate is "any WLAN on this radio asked for it", the most PERMISSIVE
-	-- reading, matching rates_by_radio below: the element is an advertisement,
+	-- reading, as rates_by_radio's advertised set below: the element is an advertisement,
 	-- not a restriction -- clients that ignore it are unaffected -- so
 	-- honouring the one WLAN that wants it costs the others nothing, while
 	-- the opposite fold would silently drop a setting the controller was
@@ -2331,8 +2334,8 @@ function M.apply_config(resp, cfg, opts)
 			if not agg then
 				-- drop_below is `== true`, not `~= false`: an absent
 				-- minrate_below_disable key must count as permissive (don't
-				-- trim the advertised set), matching both the most-permissive
-				-- contract above and the `if not ...` fold below -- the old
+				-- trim the advertised set), matching both the permissive
+				-- advertised set above and the `if not ...` fold below -- the old
 				-- `~= false` made a single VAP with the key absent STRICT,
 				-- and flipped to permissive when a second identical VAP
 				-- appeared.
@@ -3878,16 +3881,14 @@ function M.apply_rate_masks()
 	end)
 	local n = 0
 	for ifname, w in pairs(want) do
-		local f = io.open("/sys/class/net/" .. ifname .. "/ifindex", "r")
-		local idx = f and f:read("*l")
-		if f then f:close() end
-		local key = tostring(idx) .. "|" .. w.list
+		local idx = M._read_file("/sys/class/net/" .. ifname .. "/ifindex")
+		local key = tostring(idx and idx:match("%d+")) .. "|" .. w.list
 		local failed = M._mask_failed[ifname]
 		local wait = failed and failed.key == key and M._now() - failed.at < M.MASK_RETRY
 		if M._masks[ifname] ~= key and not wait then
 			local kind = (w.band == "2g") and "legacy-2.4" or "legacy-5"
 			local rc = M._run_cmd("iw dev " .. ifname .. " set bitrates " .. kind .. " " .. w.list .. " >/dev/null 2>&1")
-			if rc == 0 or rc == true then
+			if util.exec_ok(rc) then
 				M._masks[ifname] = key
 				M._mask_failed[ifname] = nil
 				n = n + 1
