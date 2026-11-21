@@ -7113,6 +7113,38 @@ return {
 		end
 	},
 	{
+		name = "inform: _tick replays the last push once a WLAN a plugin needed the BSSID of is up, at most once per gap",
+		fn = function()
+			with_tick_env(function()
+				local o_replay, o_t, o_at = inform._replay_last_push, inform._time, inform._bssid_replay_at
+				local resolved, replays, why = false, 0, nil
+				inform._ucihelper = {bssid_misses_resolved = function() return resolved end}
+				inform._replay_last_push = function(_, _, w) replays = replays + 1; why = w; return true end
+				inform._http_post = function() return nil, "unreachable" end
+				inform._bssid_replay_at = nil
+				local now = 1000
+				inform._time = function() return now end
+				local ok, err = pcall(function()
+					local st, ctx = sample_state(), fresh_ctx()
+					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+					assert_eq(replays, 0, "nothing came up: no replay")
+					resolved = true
+					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+					assert_eq(replays, 1, "came up: replayed")
+					assert_contains(why, "BSSID", "and the log says why")
+					now = now + inform.BSSID_REPLAY_GAP - 1
+					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+					assert_eq(replays, 1, "within the gap: not again")
+					now = now + 1
+					with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+					assert_eq(replays, 2, "after it: again")
+				end)
+				inform._replay_last_push, inform._time, inform._bssid_replay_at = o_replay, o_t, o_at
+				if not ok then error(err, 0) end
+			end)
+		end
+	},
+	{
 		name = "inform: device Band Steering prefer_5g turns steering on; off and equal leave per-WLAN alone",
 		fn = function()
 			local orig_stderr = io.stderr

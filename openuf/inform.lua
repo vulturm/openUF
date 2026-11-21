@@ -4273,6 +4273,9 @@ end
 -- WLAN keys, as state.json holds the authkey: owner-only from the empty file
 -- on, before the body is written.
 M.LAST_PUSH_FILE = "/tmp/openuf-last-push.json"
+-- The least time between two replays for a WLAN that came up after its push
+-- (_tick); each one reloads the WLANs.
+M.BSSID_REPLAY_GAP = 300
 M._chmod600 = function(path) return os.execute("chmod 600 '" .. path:gsub("'", "'\\''") .. "'") end
 
 function M._save_last_push(json_str)
@@ -4287,14 +4290,14 @@ end
 
 -- Apply the saved push again, as if the controller had just sent it. Returns
 -- true when there was one and it ran.
-function M._replay_last_push(st, cfg)
+function M._replay_last_push(st, cfg, why)
 	local f = io.open(M.LAST_PUSH_FILE, "r")
 	if not f then return false end
 	local s = f:read("*a")
 	f:close()
 	if not s or s == "" then return false end
-	io.stderr:write("openuf: a local option that applies with the configuration changed -- "
-		.. "applying the last push again\n")
+	io.stderr:write("openuf: " .. (why or "a local option that applies with the configuration changed")
+		.. " -- applying the last push again\n")
 	M._replaying = true
 	local ok, err = pcall(M.handle_response, s, st, cfg)
 	M._replaying = false
@@ -8564,6 +8567,16 @@ function M._tick(st, cfg, ufhw, ctx)
 	if M._replay_due then
 		M._replay_due = false
 		pcall(M._replay_last_push, st, cfg)
+	elseif ufuci and ufuci.bssid_misses_resolved
+		and (M._time() - (M._bssid_replay_at or -math.huge)) >= M.BSSID_REPLAY_GAP then
+		-- A WLAN a plugin needed the BSSID of came up after its push
+		-- (ucihelper._bssid_misses). At most once per gap: a VAP that comes
+		-- and goes must not reload the radios on every heartbeat.
+		local ok, resolved = pcall(ufuci.bssid_misses_resolved)
+		if ok and resolved then
+			M._bssid_replay_at = M._time()
+			pcall(M._replay_last_push, st, cfg, "a WLAN came up after its push and a plugin needs its BSSID")
+		end
 	end
 	-- Each WLAN's own Minimum Data Rate (ucihelper.apply_rate_masks): again
 	-- whenever a reload recreated its netdev, which drops the mask.
