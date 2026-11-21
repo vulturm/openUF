@@ -192,6 +192,7 @@ local test_files = {
 	"tests/test_roamassist.lua",
 	"tests/test_handover.lua",
 	"tests/test_clientmatch.lua",
+	"tests/test_ftpeer.lua",
 	"tests/test_airtime.lua",
 	"tests/test_mcsnoop.lua",
 	"tests/test_ota.lua",

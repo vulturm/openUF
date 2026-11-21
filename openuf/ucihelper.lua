@@ -130,6 +130,7 @@ end
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
 local function get_minrssi()  return get_sibling("minrssi",  M._minrssi)  end
 local function get_handover() return get_sibling("handover", M._handover) end
+local function get_ftpeer()   return get_sibling("ftpeer",   M._ftpeer)   end
 
 -- conf.lua handover_before_reload, as the last push read it: a reload outside
 -- a push (set_radio_channel) has no cfg of its own.
@@ -2432,6 +2433,8 @@ function M.apply_config(resp, cfg, opts)
 		if plugins and plugins.begin_pass then plugins.begin_pass() end
 	end
 	M._bssid_misses = {}
+	-- ftpeer.lua's store, read on the first WLAN that needs it.
+	local ftpeer_map = nil
 	for _, vap in ipairs(vap_table) do
 		if vap.ssid and vap.radio then
 			local extra = {}
@@ -3097,6 +3100,15 @@ function M.apply_config(resp, cfg, opts)
 						bssid  = plugin_bssid,
 						cursor = function() return get_uci().cursor() end,
 					})
+				end
+				-- rrb-unifi's one ft_peer list, cut down to this WLAN's
+				-- peers (ftpeer.lua): another SSID's BSSes get no keys.
+				if type(extra.r0kh) == "table" then
+					if ftpeer_map == nil then
+						local fp = get_ftpeer()
+						ftpeer_map = fp and {mod = fp, map = fp.load()} or false
+					end
+					if ftpeer_map then ftpeer_map.mod.filter(extra, vap.ssid, ftpeer_map.map) end
 				end
 			end
 

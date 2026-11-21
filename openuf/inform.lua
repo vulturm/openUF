@@ -54,6 +54,7 @@ local devlogin  = _require_sibling("devlogin")
 local l2guard   = _require_sibling("l2guard")
 local roamassist = _require_sibling("roamassist")
 local clientmatch = _require_sibling("clientmatch")
+local ftpeer    = _require_sibling("ftpeer")
 local airtime   = _require_sibling("airtime")
 local mcsnoop   = _require_sibling("mcsnoop")
 local backhaul  = _require_sibling("backhaul")
@@ -107,6 +108,7 @@ if remotelog then remotelog._crypto = crypto end
 M._l2guard    = l2guard
 M._roamassist = roamassist
 M._clientmatch = clientmatch
+M._ftpeer     = ftpeer
 M._airtime    = airtime
 M._mcsnoop    = mcsnoop
 M._backhaul   = backhaul
@@ -6920,6 +6922,39 @@ end
 
 -- ─── 802.11k neighbour list (nrlist.lua) ─────────────────────────────────────
 
+-- ─── rrb-unifi's ft_peer list (ftpeer.lua) ───────────────────────────────────
+
+-- Every FTPEER_INTERVAL, the first FTPEER_FIRST after the start: the scan
+-- cache has been read into nrlist by then. A changed list replays the last
+-- push, which is what has rrb-unifi write the new key holders.
+M.FTPEER_INTERVAL = 300
+M.FTPEER_FIRST    = 90
+M._ftpeer_next    = nil
+function M._ftpeer_tick(st, cfg)
+	if not (M._ftpeer and M._nrlist) then return false end
+	local now = M._time()
+	if M._ftpeer_next == nil then M._ftpeer_next = now + M.FTPEER_FIRST end
+	if now < M._ftpeer_next then return false end
+	M._ftpeer_next = now + M.FTPEER_INTERVAL
+	local ufuci = M._ucihelper
+	local ok_v, vaps = pcall(ufuci.get_vap_table)
+	if not ok_v or type(vaps) ~= "table" then return false end
+	local own = {}
+	for _, v in ipairs(vaps) do
+		if util.is_mac(v.bssid) then own[v.bssid:lower()] = true end
+	end
+	local ok_c, uci = pcall(require, "uci")
+	local cursor = ok_c and uci and uci.cursor() or nil
+	local ok_t, changed, list = pcall(M._ftpeer.tick, cursor, M._nrlist._seen, own, now)
+	if ok_t and changed then
+		io.stderr:write(("inform: rrb-unifi ft_peer: %d peer(s), rewriting the 802.11r key holders\n")
+			:format(#(list or {})))
+		M._replay_due = true
+		return true
+	end
+	return false
+end
+
 -- ─── The sibling element a genuine UniFi AP reads ────────────────────────────
 
 -- The emulated model's sysid (ufmodel `sysid`), set by M.run. With it every VAP
@@ -8866,6 +8901,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._remotelog_resync, st, cfg)
 	-- Not pcall'd away silently: a rollback ends the process on purpose.
 	pcall(M._nrlist_tick, st, cfg)
+	pcall(M._ftpeer_tick, st, cfg)
 	local ok_ag, err_ag = pcall(M._applyguard_tick, st, cfg)
 	if not ok_ag then io.stderr:write("inform: applyguard: " .. tostring(err_ag) .. "\n") end
 	pcall(M._backhaul_tick, st, cfg)
