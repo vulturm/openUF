@@ -724,7 +724,7 @@ end
 -- drain -- the file can only be emptied once.
 function M.harvest(blob)
 	if blob == nil then blob = M.drain() end
-	if not blob then return {}, {} end
+	if not blob then return {}, {}, {} end
 
 	local now, seen, out = M._now(), {}, {}
 	-- Every station that produced ANY beacon-report notification, whatever
@@ -764,6 +764,20 @@ function M.harvest(blob)
 			if v ~= nil then M._rcpi_signed[sta] = v end
 		end
 	end
+	-- What each station heard, BSS by BSS, for clientmatch.lua: the harvest
+	-- below keeps one record per BSSID whoever reported it, which is the
+	-- Environment's view and not a station's.
+	local by_sta = {}
+	local function heard(sta, bssid, signal)
+		if not (sta and bssid and signal) or bssid == "00:00:00:00:00:00" then return end
+		sta, bssid = sta:lower(), bssid:lower()
+		by_sta[sta] = by_sta[sta] or {}
+		local prev = by_sta[sta][bssid]
+		if not prev or signal > prev.signal then
+			by_sta[sta][bssid] = {signal = signal, seen_at = now}
+		end
+	end
+	for _, c in ipairs(ctrl) do heard(c.sta, c.rec.bssid, M.signal_of(c.sta, c.rec.rcpi)) end
 	for _, c in ipairs(ctrl) do
 		local r = c.rec
 		if r.band and r.bssid ~= "00:00:00:00:00:00" and not seen[r.bssid] then
@@ -786,7 +800,10 @@ function M.harvest(blob)
 		-- Only a mode-0 body counts as an answer. A bodied refusal (rep-mode
 		-- 4 in the fixture, from upstream's board) is a station declining
 		-- too, and the caller benches those the same as the silent kind.
-		if address and repmode == 0 then reporters[address:lower()] = true end
+		if address and repmode == 0 then
+			reporters[address:lower()] = true
+			if bssid then heard(address, bssid, M.signal_of(address, rcpi)) end
+		end
 		local band     = M.band_of_channel(channel)
 		if bssid and band and repmode == 0
 		   and bssid ~= "00:00:00:00:00:00" and not seen[bssid] then
@@ -800,7 +817,7 @@ function M.harvest(blob)
 			}
 		end
 	end
-	return out, reporters
+	return out, reporters, by_sta
 end
 
 -- Merge harvested neighbours into one radio's scan_table.

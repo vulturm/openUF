@@ -183,6 +183,12 @@ return {
 					assert_eq(out[1].channel, 36, "with its primary channel, not 42")
 					assert_true(reporters["00:00:5e:00:53:10"] == true, "ctrl reporter counted")
 					assert_true(reporters["00:00:5e:00:53:11"] == true, "ubus reporter counted")
+					-- The per-station view keeps who heard what, for clientmatch.lua.
+					local _, _, by_sta = rrmscan.harvest(ubus .. ctrl)
+					assert_true(by_sta["00:00:5e:00:53:10"]["00:00:5e:00:53:01"] ~= nil,
+						"the ctrl reporter's BSS")
+					assert_eq(by_sta["00:00:5e:00:53:11"]["00:00:5e:00:53:01"].signal, -50,
+						"the ubus reporter's, rcpi 120 -> -50 dBm")
 				end)
 			end)
 			-- Fragment 1 of the same BSSID arriving first does not take its place.
