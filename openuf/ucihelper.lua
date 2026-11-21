@@ -1434,16 +1434,15 @@ local function plugin_bssid(radio, ssid)
 	return b
 end
 
--- true once a VAP that had no BSSID at the last apply has one; the list is
--- emptied then, and the replay fills it again with whatever is still down.
-function M.bssid_misses_resolved()
+-- How many of those VAPs have an address now, out of how many. The list
+-- lasts until the next apply_config, which the replay is, so whatever is
+-- still down then is listed again.
+function M.bssid_misses_status()
+	local up = 0
 	for _, m in ipairs(M._bssid_misses) do
-		if M.vap_bssid(m.radio, m.ssid) then
-			M._bssid_misses = {}
-			return true
-		end
+		if M.vap_bssid(m.radio, m.ssid) then up = up + 1 end
 	end
-	return false
+	return up, #M._bssid_misses
 end
 
 -- ─── The veth pair an earlier openUF wrote for its own translator ──────────
