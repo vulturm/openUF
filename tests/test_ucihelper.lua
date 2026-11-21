@@ -1311,6 +1311,32 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: with the advertising sub-toggle on, basic and beacon rates stay inside the advertised set",
+		fn = function()
+			with_ucihelper(function(db)
+				seed_radios()
+				-- A 9 Mbps floor: basic_for gives 6+24, but 6 is no longer
+				-- advertised -- hostapd drops it, and the beacon went out at 6.
+				ucihelper.apply_config({radio_table = {{name = "radio0"}}, vap_table = {
+					{ssid = "corp", radio = "radio0", security = "wpa2", x_passphrase = "hunter22",
+					 minrate_data = 9000, minrate_cck = false, minrate_below_disable = true},
+				}}, nil)
+				local r = db.wireless.radio0
+				assert_eq(r.supported_rates[1], "9000", "advertised from the floor")
+				assert_eq(table.concat(r.basic_rate, ","), "24000", "6 left out: it is not advertised")
+				assert_eq(r.beacon_rate, "240", "the beacon at an advertised basic rate")
+				-- 36: no mandatory rate at or above it is advertised at all.
+				seed_radios()
+				ucihelper.apply_config({radio_table = {{name = "radio0"}}, vap_table = {
+					{ssid = "corp", radio = "radio0", security = "wpa2", x_passphrase = "hunter22",
+					 minrate_data = 36000, minrate_cck = false, minrate_below_disable = true},
+				}}, nil)
+				r = db.wireless.radio0
+				assert_eq(table.concat(r.basic_rate, ","), "36000", "the lowest advertised rate stands in")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_config makes the strictest WLAN's floor basic and stamps each WLAN's own",
 		fn = function()
 			with_ucihelper(function(db)

@@ -2369,6 +2369,20 @@ function M.apply_config(resp, cfg, opts)
 					-- The beacon goes out at the lowest basic rate: one below
 					-- it is a rate some admitted stations need not decode.
 					rates.basic_rate = M.basic_for(agg.strict, agg.allow_cck)
+					-- With the advertising sub-toggle on, a basic rate must
+					-- also be advertised: hostapd drops one missing from
+					-- supported_rates, and a 9 Mbps floor beaconed at 6, a rate
+					-- the BSS did not advertise. The lowest advertised rate
+					-- stands in when none is left.
+					if rates.supported_rates then
+						local adv, kept = {}, {}
+						for _, r in ipairs(rates.supported_rates) do adv[r] = true end
+						for _, r in ipairs(rates.basic_rate) do
+							if adv[r] then kept[#kept + 1] = r end
+						end
+						if #kept == 0 then kept = {rates.supported_rates[1]} end
+						rates.basic_rate = kept
+					end
 					local low = rates.basic_rate[1]
 					rates.beacon_rate = (agg.beacon_rate and agg.beacon_rate > low)
 						and agg.beacon_rate or low
