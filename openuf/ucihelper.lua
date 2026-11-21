@@ -3091,7 +3091,11 @@ function M.apply_config(resp, cfg, opts)
 						local fp = get_ftpeer()
 						ftpeer_map = fp and {mod = fp, map = fp.load()} or false
 					end
-					if ftpeer_map then ftpeer_map.mod.filter(extra, vap.ssid, ftpeer_map.map) end
+					if ftpeer_map then
+						ftpeer_map.mod.filter(extra, vap.ssid, ftpeer_map.map)
+						-- inform._ftpeer_tick: a deferred rewrite is done.
+						M._ftpeer_applied_at = os.time()
+					end
 				end
 			end
 

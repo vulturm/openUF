@@ -93,11 +93,12 @@ return {
 		fn = function()
 			with_files({[ftpeer.ENABLED] = "rrb-unifi\n"}, function()
 				local c = cursor({U7G .. ",b29c6cb8ab7f"})
-				local changed = ftpeer.tick(c, {[U7G] = {ssid = "AP-guest", at = NOW}}, {}, NOW)
-				assert_true(changed, "the same list, but now cut per SSID: rewrite the WLANs")
+				local changed, _, pending = ftpeer.tick(c, {[U7G] = {ssid = "AP-guest", at = NOW}}, {}, NOW)
+				assert_false(changed, "the same list: nothing now")
+				assert_true(pending, "but the per-SSID cut moved: a deferred rewrite")
 				assert_eq(c.commits, 0, "the list itself is not rewritten")
-				assert_false(ftpeer.tick(c, {[U7G] = {ssid = "AP-guest", at = NOW + 60}}, {}, NOW + 60),
-					"nothing new: nothing to do")
+				local ch2, _, p2 = ftpeer.tick(c, {[U7G] = {ssid = "AP-guest", at = NOW + 60}}, {}, NOW + 60)
+				assert_false(ch2 or p2, "nothing new: nothing to do")
 				assert_false(ftpeer.tick(c, {}, {}, NOW + ftpeer.KEEP - 10), "kept as a learned peer")
 				assert_true(ftpeer.tick(c, {}, {}, NOW + 60 + ftpeer.KEEP + 1), "and aged out like one")
 			end)
@@ -118,16 +119,57 @@ return {
 		end
 	},
 	{
-		name = "ftpeer: the first pass after a start asks for the rewrite once",
+		name = "ftpeer: the first pass after a start asks for a deferred rewrite once",
 		fn = function()
 			with_files({[ftpeer.ENABLED] = "rrb-unifi\n"}, function()
 				ftpeer.tick(cursor(), {[U7G] = {ssid = "AP-guest", at = NOW}}, {}, NOW)
 				local c = cursor({U7G .. ",b29c6cb8ab7f"})
 				ftpeer._map, ftpeer._first = nil, true
-				assert_true(ftpeer.tick(c, {}, {}, NOW + 60), "a restart: rewrite once")
-				assert_false(ftpeer.tick(c, {}, {}, NOW + 120), "then only on a change")
+				local ch, _, p = ftpeer.tick(c, {}, {}, NOW + 60)
+				assert_false(ch, "a restart: nothing now")
+				assert_true(p, "but a deferred rewrite")
+				local ch2, _, p2 = ftpeer.tick(c, {}, {}, NOW + 120)
+				assert_false(ch2 or p2, "then only on a change")
 				assert_eq(c.commits, 0, "the list itself untouched")
 			end)
+		end
+	},
+	{
+		name = "inform: a deferred rewrite waits for a push, or replays in FTPEER_HOUR",
+		fn = function()
+			local inform = dofile("openuf/inform.lua")
+			local res = {}
+			local now = os.time({year = 2026, month = 1, day = 10, hour = 13, min = 0})
+			inform._time = function() return now end
+			inform._nrlist = {_seen = {}}
+			inform._ucihelper = {get_vap_table = function() return {} end}
+			inform._ftpeer = {tick = function() return false, {}, res.pending end}
+			inform._ftpeer_next = 0
+			inform._replay_due = false
+			local function tick()
+				inform._ftpeer_next = 0
+				local ok, r = pcall(inform._ftpeer_tick, {}, {})
+				assert_true(ok, "no error")
+				return r
+			end
+			res.pending = true
+			assert_false(tick(), "13:00: deferred, no replay")
+			assert_false(inform._replay_due, "nothing replayed")
+			res.pending = nil
+			now = os.time({year = 2026, month = 1, day = 11, hour = 4, min = 2})
+			assert_true(tick(), "04:02: the deferred rewrite replays")
+			assert_true(inform._replay_due, "replay due")
+			inform._replay_due = false
+			assert_false(tick(), "once")
+			-- A push in between carries it: nothing at 04:00.
+			now = os.time({year = 2026, month = 1, day = 11, hour = 13, min = 0})
+			res.pending = true
+			tick()
+			res.pending = nil
+			inform._ucihelper._ftpeer_applied_at = now + 10
+			now = os.time({year = 2026, month = 1, day = 12, hour = 4, min = 2})
+			assert_false(tick(), "a push applied the cut meanwhile")
+			assert_false(inform._replay_due, "no night reload")
 		end
 	},
 	{

@@ -164,16 +164,22 @@ end
 
 -- The last map tick() worked from, and what of it is on flash.
 M._map = nil
--- The first pass of a process asks for the rewrite whatever it finds: what
+-- The first pass of a process also asks for a rewrite, a deferred one: what
 -- the WLANs carry was cut by whatever ran before (an older openUF, a store
--- written by a previous run), and a replay that changes nothing reloads
--- nothing.
+-- written by a previous run).
 M._first = true
 
 -- One pass: refresh the peers from `seen`, write the store when it moved,
--- and rrb-unifi's ft_peer when the list changed. Returns true when the
--- WLANs need their 802.11r block rewritten -- the list changed, or a peer's
--- SSID did, which moves it between WLANs -- and the list.
+-- and rrb-unifi's ft_peer when the list changed. Returns:
+--   changed  the list changed: the WLANs need the new key holders now
+--   list     the list
+--   pending  the list is the same, but a peer's SSID was learned (or this is
+--            the first pass): only filter()'s per-WLAN cut moves, and that
+--            can wait for a reload that comes anyway -- every reload drops
+--            the 802.11r keys of the clients this AP authenticated, and a
+--            phone that authenticated here could then roam back by FT no
+--            more (xan-bc: the key was asked for five times, and nobody had
+--            it).
 function M.tick(cursor, seen, own, now)
 	if not M.plugin_enabled() then return false end
 	if not (cursor and cursor.get and cursor.set) then return false end
@@ -185,7 +191,7 @@ function M.tick(cursor, seen, own, now)
 	local want = M.list_for(map, current, gone)
 	local first = M._first
 	M._first = false
-	if same(current, want) then return moved or first, want end
+	if same(current, want) then return false, want, moved or first end
 	if not cursor:get(M.RRB, "main") then cursor:set(M.RRB, "main", "rrb") end
 	if #want > 0 then
 		cursor:set(M.RRB, "main", "ft_peer", want)

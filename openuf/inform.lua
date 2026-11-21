@@ -6926,10 +6926,15 @@ end
 
 -- Every FTPEER_INTERVAL, the first FTPEER_FIRST after the start: the scan
 -- cache has been read into nrlist by then. A changed list replays the last
--- push, which is what has rrb-unifi write the new key holders.
+-- push, which is what has rrb-unifi write the new key holders. A change of
+-- the per-SSID cut alone (ftpeer.tick's `pending`) waits: any push applied
+-- meanwhile carries it (ucihelper._ftpeer_applied_at), and otherwise it is
+-- replayed in FTPEER_HOUR, local time, when the fewest clients are about.
 M.FTPEER_INTERVAL = 300
 M.FTPEER_FIRST    = 90
+M.FTPEER_HOUR     = 4
 M._ftpeer_next    = nil
+M._ftpeer_pending = nil   -- since when a deferred rewrite waits
 function M._ftpeer_tick(st, cfg)
 	if not (M._ftpeer and M._nrlist) then return false end
 	local now = M._time()
@@ -6945,12 +6950,24 @@ function M._ftpeer_tick(st, cfg)
 	end
 	local ok_c, uci = pcall(require, "uci")
 	local cursor = ok_c and uci and uci.cursor() or nil
-	local ok_t, changed, list = pcall(M._ftpeer.tick, cursor, M._nrlist._seen, own, now)
+	local ok_t, changed, list, pending = pcall(M._ftpeer.tick, cursor, M._nrlist._seen, own, now)
 	if ok_t and changed then
 		io.stderr:write(("inform: rrb-unifi ft_peer: %d peer(s), rewriting the 802.11r key holders\n")
 			:format(#(list or {})))
 		M._replay_due = true
+		M._ftpeer_pending = nil
 		return true
+	end
+	if ok_t and pending and not M._ftpeer_pending then M._ftpeer_pending = now end
+	if M._ftpeer_pending then
+		if (ufuci._ftpeer_applied_at or 0) >= M._ftpeer_pending then
+			M._ftpeer_pending = nil
+		elseif tonumber(os.date("*t", now).hour) == M.FTPEER_HOUR then
+			io.stderr:write("inform: rrb-unifi ft_peer: applying the per-SSID key holders deferred until now\n")
+			M._replay_due = true
+			M._ftpeer_pending = nil
+			return true
+		end
 	end
 	return false
 end
