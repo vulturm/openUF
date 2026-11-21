@@ -164,6 +164,11 @@ end
 
 -- The last map tick() worked from, and what of it is on flash.
 M._map = nil
+-- The first pass of a process asks for the rewrite whatever it finds: what
+-- the WLANs carry was cut by whatever ran before (an older openUF, a store
+-- written by a previous run), and a replay that changes nothing reloads
+-- nothing.
+M._first = true
 
 -- One pass: refresh the peers from `seen`, write the store when it moved,
 -- and rrb-unifi's ft_peer when the list changed. Returns true when the
@@ -178,7 +183,9 @@ function M.tick(cursor, seen, own, now)
 	if dirty then M.save(map) end
 	local current = as_list(cursor:get(M.RRB, "main", "ft_peer"))
 	local want = M.list_for(map, current, gone)
-	if same(current, want) then return moved, want end
+	local first = M._first
+	M._first = false
+	if same(current, want) then return moved or first, want end
 	if not cursor:get(M.RRB, "main") then cursor:set(M.RRB, "main", "rrb") end
 	if #want > 0 then
 		cursor:set(M.RRB, "main", "ft_peer", want)

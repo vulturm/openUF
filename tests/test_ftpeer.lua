@@ -39,12 +39,12 @@ end
 
 -- The module's file access, faked: plugins.enabled and the store.
 local function with_files(files, fn)
-	local o = {ftpeer._read_file, ftpeer._write_file, ftpeer._map}
+	local o = {ftpeer._read_file, ftpeer._write_file, ftpeer._map, ftpeer._first}
 	ftpeer._read_file = function(p) return files[p] end
 	ftpeer._write_file = function(p, s) files[p] = s; return true end
-	ftpeer._map = nil
+	ftpeer._map, ftpeer._first = nil, false
 	local ok, err = pcall(fn, files)
-	ftpeer._read_file, ftpeer._write_file, ftpeer._map = o[1], o[2], o[3]
+	ftpeer._read_file, ftpeer._write_file, ftpeer._map, ftpeer._first = o[1], o[2], o[3], o[4]
 	if not ok then error(err, 0) end
 end
 
@@ -114,6 +114,19 @@ return {
 				ftpeer._map = nil
 				local m = ftpeer.load()
 				assert_eq(m[U7G] and m[U7G].ssid, "AP-guest", "read back")
+			end)
+		end
+	},
+	{
+		name = "ftpeer: the first pass after a start asks for the rewrite once",
+		fn = function()
+			with_files({[ftpeer.ENABLED] = "rrb-unifi\n"}, function()
+				ftpeer.tick(cursor(), {[U7G] = {ssid = "AP-guest", at = NOW}}, {}, NOW)
+				local c = cursor({U7G .. ",b29c6cb8ab7f"})
+				ftpeer._map, ftpeer._first = nil, true
+				assert_true(ftpeer.tick(c, {}, {}, NOW + 60), "a restart: rewrite once")
+				assert_false(ftpeer.tick(c, {}, {}, NOW + 120), "then only on a change")
+				assert_eq(c.commits, 0, "the list itself untouched")
 			end)
 		end
 	},
