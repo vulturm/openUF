@@ -7156,6 +7156,24 @@ return {
 		end
 	},
 	{
+		name = "inform: the status file carries the clients per band, for the portal's public page",
+		fn = function()
+			local o_file, o_counts = inform.STATUS_FILE, inform._client_counts
+			inform.STATUS_FILE = os.tmpname()
+			inform._client_counts = {na = 2, ng = 0}
+			local ok, err = pcall(function()
+				inform._write_status({}, {last_ok = 1})
+				local f = io.open(inform.STATUS_FILE, "r")
+				local text = f:read("*a")
+				f:close()
+				assert_contains(text, "\nclients=na:2,ng:0\n", "every band with a WLAN, sorted, zero included")
+			end)
+			os.remove(inform.STATUS_FILE)
+			inform.STATUS_FILE, inform._client_counts = o_file, o_counts
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: each station's beacon reports are kept for client steering, and dropped when old",
 		fn = function()
 			local o = inform._sta_reports

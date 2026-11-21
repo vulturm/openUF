@@ -1371,6 +1371,8 @@ function M.build_json(st, cfg, ufhw)
 		local steer_on = cfg and cfg.config and cfg.config.client_steering == true
 			and not M._usteer_steering
 		local steer_obs = {}
+		-- Associated clients per band ("ng", "na", "6e"), for _write_status.
+		local client_counts = {}
 		-- Minimum RSSI: one observation per station on a radio that has it
 		-- on, decided on after the loop (see openuf/minrssi.lua).
 		local minrssi_obs = {}
@@ -1501,6 +1503,11 @@ function M.build_json(st, cfg, ufhw)
 				end
 			end
 			local is_backhaul_vap = (vap.usage == "uplink" or vap.usage == "downlink")
+			-- Clients per band for the status file (the portal's public page):
+			-- a mesh child behind a downlink is not a client.
+			if not is_backhaul_vap and vap.radio then
+				client_counts[vap.radio] = (client_counts[vap.radio] or 0) + #stas
+			end
 			-- Per-VAP traffic/retry counters ("Air Stats" in the controller
 			-- UI) -- confirmed real field names via the decompiled vap-stats
 			-- DTO (cVbZoFIZsWYaVCquTr$QCtdvLKOBb): rx_bytes/rx_packets/
@@ -1872,6 +1879,7 @@ function M.build_json(st, cfg, ufhw)
 					M._assoctrack.note_kick(mac, M._assoctrack.KICK_ROAM_ASSIST)
 				 end})
 		end
+		M._client_counts = client_counts
 		if M._clientmatch and #steer_obs > 0 then
 			local rrm = M._rrmscan
 			pcall(M._clientmatch.tick, steer_obs, now, {
@@ -8427,6 +8435,17 @@ function M._write_status(st, fields)
 	if s.rollback then
 		lines[#lines + 1] = "rollback=" .. tostring(s.rollback)
 		lines[#lines + 1] = "rollback_msg=" .. tostring(s.rollback_msg or ""):gsub("[\r\n]", " ")
+	end
+	-- Associated clients per band, as band:count pairs (build_json): what the
+	-- portal's public page shows, read with the rest of this file instead of
+	-- asking hostapd once per visitor.
+	if M._client_counts then
+		local bands = {}
+		for band in pairs(M._client_counts) do bands[#bands + 1] = band end
+		table.sort(bands)
+		local pairs_ = {}
+		for _, band in ipairs(bands) do pairs_[#pairs_ + 1] = band .. ":" .. M._client_counts[band] end
+		lines[#lines + 1] = "clients=" .. table.concat(pairs_, ",")
 	end
 	-- A radio whose driver applies another regulatory domain than UCI's
 	-- (_regd_tick), as radio:have!=want pairs.
