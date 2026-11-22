@@ -7,6 +7,9 @@ dofile("openuf/lib/lib.lua")	-- needed by announce (loaded by inform)
 local crypto = dofile("openuf/crypto.lua")
 local state  = dofile("openuf/state.lua")
 local inform = dofile("openuf/inform.lua")
+-- staip.lua shells out to nft; a test must never touch the host's tables.
+inform._staip._exec = function() return 0 end
+inform._staip._popen = function() return "" end
 local cjson  = require("cjson")
 
 -- Redirect state file to /tmp so handle_response tests don't need /etc/openuf

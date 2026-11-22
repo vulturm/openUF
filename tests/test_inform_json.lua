@@ -8,6 +8,9 @@ dofile("openuf/lib/lib.lua")
 local cjson  = require("cjson")
 local state  = dofile("openuf/state.lua")
 local inform = dofile("openuf/inform.lua")
+-- staip.lua shells out to nft; a test must never touch the host's tables.
+inform._staip._exec = function() return 0 end
+inform._staip._popen = function() return "" end
 
 -- build_json looks the inform URL's host up; keep the suite off the network.
 inform._dns_toip = function() return nil end
@@ -3085,6 +3088,41 @@ return {
 			assert_eq(vap.reasons_bar_chart.phy_rate, 0, "none by its phy rate on 2.4 GHz")
 			assert_eq(anomalies, 0, "no anomalies on these clients")
 			assert_eq(vap.anomalies_bar_chart.weak_signal, 0, "every anomaly key is sent")
+		end
+	},
+	{
+		-- As a U7's mca-dump: ip, and vlan_id 1 on the native network, 20 on a
+		-- tagged one, where the AP's own ARP cache can never name the client.
+		name = "inform json: a client carries its ip and vlan_id, a backhaul station neither",
+		fn = function()
+			local o_ip, o_bridge = inform._staip.ip, inform._sysinfo.bridge_of
+			local arp = inform._sysinfo._ip_by_mac
+			inform._staip.ip = function(m) return m and "192.168.20.19" or nil end
+			inform._sysinfo.bridge_of = function() return "br-openuf20" end
+			local ok, err = pcall(function()
+				local s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
+				assert_eq(s.ip, "192.168.20.19", "the address staip learned")
+				assert_eq(s.vlan_id, 20, "the VLAN of br-openuf20")
+				inform._sysinfo.bridge_of = function() return "br-lan" end
+				s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
+				assert_eq(s.vlan_id, 1, "any other bridge is the native network")
+				inform._sysinfo.bridge_of = function() return nil end
+				inform._staip.ip = function() return nil end
+				s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
+				assert_nil(s.vlan_id, "in no bridge: no VLAN claimed")
+				assert_nil(s.ip, "not learned: no address")
+				inform._staip.ip = function() return "192.168.20.19" end
+				inform._sysinfo.bridge_of = function() return "br-lan" end
+				s = build({with_uci = true, with_clients = true,
+					vap_patch = function(v) v[1].usage = "uplink" end}).vap_table[1].sta_table[1]
+				assert_nil(s.ip, "the parent is no client")
+				assert_nil(s.vlan_id, "nor is it put on a VLAN")
+				assert_eq(inform._sta_ip("00:00:5e:00:53:01"), "192.168.20.19", "no ARP entry: learned")
+				inform._sysinfo._ip_by_mac = function() return {["00:00:5e:00:53:01"] = "192.168.10.9"} end
+				assert_eq(inform._sta_ip("00:00:5E:00:53:01"), "192.168.10.9", "the AP's own ARP cache first")
+			end)
+			inform._staip.ip, inform._sysinfo.bridge_of, inform._sysinfo._ip_by_mac = o_ip, o_bridge, arp
+			if not ok then error(err, 0) end
 		end
 	},
 	{

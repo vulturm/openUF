@@ -57,6 +57,7 @@ local clientmatch = _require_sibling("clientmatch")
 local ftpeer    = _require_sibling("ftpeer")
 local airtime   = _require_sibling("airtime")
 local mcsnoop   = _require_sibling("mcsnoop")
+local staip     = _require_sibling("staip")
 local backhaul  = _require_sibling("backhaul")
 local meshvlan  = _require_sibling("meshvlan")
 local assoctrack = _require_sibling("assoctrack")
@@ -111,6 +112,7 @@ M._clientmatch = clientmatch
 M._ftpeer     = ftpeer
 M._airtime    = airtime
 M._mcsnoop    = mcsnoop
+M._staip      = staip
 M._backhaul   = backhaul
 M._meshvlan   = meshvlan
 M._assoctrack = assoctrack
@@ -838,6 +840,24 @@ local function _windowed_cu(name, s, sta)
 	return now.out[1], now.out[2], now.out[3]
 end
 
+-- A client's address: the AP's own ARP cache where it has one, else what
+-- staip.lua learned on the VAP (a tagged SSID's VLAN holds no address here).
+function M._sta_ip(mac)
+	if type(mac) ~= "string" then return nil end
+	local ok, arp = pcall(M._sysinfo._ip_by_mac)
+	local ip = ok and type(arp) == "table" and arp[mac:lower()] or nil
+	if ip and ip ~= "0.0.0.0" then return ip end
+	return M._staip and M._staip.ip(mac) or nil
+end
+
+-- The VLAN of the bridge a client's netdev is in: openUF's br-openuf<vid>, or
+-- 1 for any other bridge (the native network). nil when it is in none.
+function M._sta_vlan(dev)
+	local ok, br = pcall(M._sysinfo.bridge_of, dev)
+	if not (ok and type(br) == "string") then return nil end
+	return tonumber(br:match("^br%-openuf(%d+)$")) or 1
+end
+
 -- Build the inform JSON payload.
 -- st: current state table
 -- cfg: device configuration (from conf.lua)
@@ -1456,6 +1476,7 @@ function M.build_json(st, cfg, ufhw)
 		local steer_on = cfg and cfg.config and cfg.config.client_steering == true
 			and not M._usteer_steering
 		local steer_obs = {}
+		local staip_devs = {}
 		-- Associated clients per band ("ng", "na", "6e"), for _write_status.
 		local client_counts = {}
 		-- Minimum RSSI: one observation per station on a radio that has it
@@ -1588,6 +1609,10 @@ function M.build_json(st, cfg, ufhw)
 				end
 			end
 			local is_backhaul_vap = (vap.usage == "uplink" or vap.usage == "downlink")
+			-- The netdevs whose ARP staip.lua learns client addresses from.
+			if not is_backhaul_vap then
+				for _, dev in ipairs(ok_if and ifnames or {}) do staip_devs[dev] = true end
+			end
 			-- Clients per band for the status file (the portal's public page):
 			-- a mesh child behind a downlink is not a client.
 			if not is_backhaul_vap and vap.radio then
@@ -1750,6 +1775,10 @@ function M.build_json(st, cfg, ufhw)
 					-- BSS; serialno names the parent device, which is how the
 					-- controller attributes the wireless uplink (nil otherwise).
 					serialno = sta.serialno,
+					-- As a U7's mca-dump has them: `ip`, and `vlan_id` 1 on the
+					-- native network. Clients only; nil when not known.
+					ip      = not is_backhaul_vap and M._sta_ip(sta.mac) or nil,
+					vlan_id = not is_backhaul_vap and M._sta_vlan(sta_dev[sta_i]) or nil,
 					active     = true,
 					mac        = sta.mac,
 					-- Guest portal state; see M._guest_sta_authorized.
@@ -1974,6 +2003,7 @@ function M.build_json(st, cfg, ufhw)
 				 end})
 		end
 		M._client_counts = client_counts
+		M._staip_devs = staip_devs
 		if M._clientmatch and #steer_obs > 0 then
 			local rrm = M._rrmscan
 			pcall(M._clientmatch.tick, steer_obs, now, {
@@ -6603,6 +6633,10 @@ function M._forget_controller(prev, cfg)
 		if not ok then io.stderr:write("inform: forget: rate limits: " .. tostring(err) .. "\n") end
 	end
 	M._shape_obs = nil
+	if M._staip then
+		pcall(M._staip.teardown)
+		M._staip_devs = nil
+	end
 	-- What held SSIDs down for the controller's features starts over: the
 	-- reset cleared the persisted lists (sched_vaps_down, guest_vaps_down)
 	-- and forget removed the VAPs, so the in-memory switches follow -- a
@@ -7560,6 +7594,12 @@ function M._hairpin_resync()
 	if now < M._hairpin_next then return 0 end
 	M._hairpin_next = now + M.HAIRPIN_CHECK_INTERVAL
 	return M._l2guard.reconcile_hairpin()
+end
+
+-- Once a minute: the client-address table (staip.lua), on the VAPs of the
+-- last payload.
+function M._staip_resync()
+	if M._staip then return M._staip.tick(M._time(), M._staip_devs) end
 end
 
 -- Once a minute: IGMP/MLD snooping on the LAN bridge and openUF's VLAN
@@ -9028,6 +9068,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._meshvlan_resync, st, cfg)
 	pcall(M._hairpin_resync)
 	pcall(M._mcsnoop_resync, cfg)
+	pcall(M._staip_resync)
 	pcall(M._usteer_filter_resync)
 	pcall(M._usteer_watchdog_tick)
 	pcall(M._block_resync, st)
