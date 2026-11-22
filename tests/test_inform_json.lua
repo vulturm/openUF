@@ -1837,6 +1837,8 @@ return {
 			inform._ucihelper = orig
 			assert_eq(d.vap_table[1].channel, 11, "live channel")
 			assert_eq(d.vap_table[1].extchannel, -1, "secondary below the primary")
+			assert_eq(d.vap_table[1].bw, 40, "the radio's live width, on the vap as a U7 sends it")
+			assert_nil(d.radio_table[1].width, "and the internal field stays off the radio entry")
 			assert_nil(d.radio_table[1].extchannel, "not a radio_table field")
 		end
 	},

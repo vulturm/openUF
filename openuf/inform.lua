@@ -1065,6 +1065,8 @@ function M.build_json(st, cfg, ufhw)
 		local freq_by_radio = {}
 		-- Live secondary-channel side per radio, for each vap's extchannel.
 		local extchan_by_radio = {}
+		-- Live channel width per radio, for each vap's bw.
+		local width_by_radio = {}
 		-- The channel each band is on, for the status file's channels= line
 		-- (the portal's public page). Only bands whose radio answered.
 		local channel_by_band = {}
@@ -1079,6 +1081,7 @@ function M.build_json(st, cfg, ufhw)
 				-- Radios tab excluded the device entirely.
 				local ok_caps, caps = pcall(M._sysinfo.radio_caps, ifname)
 				if ok_caps and caps then
+					width_by_radio[radio.name] = caps.width
 					caps.width = nil
 					extchan_by_radio[radio.name] = caps.extchannel
 					caps.extchannel = nil
@@ -1525,6 +1528,10 @@ function M.build_json(st, cfg, ufhw)
 			-- 2.4 GHz 40 MHz channel at channel + 2 * extchannel.
 			local ext = extchan_by_radio[vap.radio_name]
 			vap.extchannel = ext ~= 0 and ext or nil
+			-- The radio's live width, on every vap as a U7's mca-dump has it:
+			-- the controller builds radio_table_stats' bw from here, and
+			-- without it every radio of this AP read 0 MHz.
+			vap.bw = width_by_radio[vap.radio_name]
 			-- Resolve THIS vap's netdev, not the radio's first one.
 			-- get_ifname_for_radio() returns whichever interface netifd
 			-- lists first, which is the same thing only on a single-SSID
