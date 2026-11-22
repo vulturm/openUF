@@ -10,6 +10,9 @@ local inform = dofile("openuf/inform.lua")
 -- staip.lua shells out to nft; a test must never touch the host's tables.
 inform._staip._exec = function() return 0 end
 inform._staip._popen = function() return "" end
+-- The sweep's stamp goes to a scratch file; each test that reads it removes it.
+inform.SCAN_STAMP_FILE = os.tmpname()
+os.remove(inform.SCAN_STAMP_FILE)
 local cjson  = require("cjson")
 
 -- Redirect state file to /tmp so handle_response tests don't need /etc/openuf
@@ -5398,6 +5401,7 @@ return {
 				assert_false(inform._maybe_scan_neighbours({config = {}}, {}), "off with no interval")
 				assert_false(inform._maybe_scan_neighbours({config = {neighbour_scan_interval = 0}}, {}),
 					"off at 0")
+				os.remove(inform.SCAN_STAMP_FILE)
 				local cfg, ctx = {config = {neighbour_scan_interval = 300}}, {}
 				assert_false(inform._maybe_scan_neighbours(cfg, ctx),
 					"never on the first pass -- ACS is still scanning at boot")
@@ -7068,6 +7072,66 @@ return {
 			-- A pair's own status line is not the device's.
 			assert_nil(inform._parse_bandsteering_system_cfg(pairs_blk),
 				"bandsteering.<n>.status is not bandsteering.status")
+		end
+	},
+	{
+		-- The interval counted from each start, so restarts closer together
+		-- than it never swept, and the siblings aged out of the 802.11k lists.
+		name = "inform: the sweep interval outlives a restart, an overdue sweep waits SCAN_SETTLE",
+		fn = function()
+			local o_time, o_all, o_read = inform._time, inform._scan_all_radios, inform._read_file
+			local t, swept = 10000, 0
+			inform._time = function() return t end
+			inform._scan_all_radios = function() swept = swept + 1; return 1 end
+			inform._read_file = function(p)
+				if p ~= inform.SCAN_STAMP_FILE then return nil end
+				local f = io.open(p, "r")
+				if not f then return nil end
+				local x = f:read("*a"); f:close()
+				return x
+			end
+			local F, cfg = inform.SCAN_STAMP_FILE, {config = {neighbour_scan_interval = 900}}
+			local function stamp(v) local f = io.open(F, "w"); f:write(tostring(v), "\n"); f:close() end
+			local ok, err = pcall(function()
+				inform._scan_jobs = {}
+				-- Swept 800 s ago, then a restart: due in 100 s, held to 120.
+				stamp(t - 800)
+				local ctx = {}
+				assert_false(inform._maybe_scan_neighbours(cfg, ctx), "never on the first pass")
+				t = 10100
+				assert_false(inform._maybe_scan_neighbours(cfg, ctx), "due, but still settling")
+				t = 10120
+				assert_true(inform._maybe_scan_neighbours(cfg, ctx), "swept, not a full interval after the restart")
+				assert_eq(swept, 1, "once")
+				local f = io.open(F, "r"); local v = f:read("*a"); f:close()
+				assert_eq(tonumber(v), 10120, "the sweep's start is recorded")
+				-- Restarts every 5 minutes no longer put it off for ever.
+				for _ = 1, 3 do
+					ctx = {}
+					t = t + 300
+					inform._maybe_scan_neighbours(cfg, ctx)
+					t = t + 120
+					inform._maybe_scan_neighbours(cfg, ctx)
+				end
+				assert_eq(swept, 2, "a run of restarts still sweeps")
+				-- Swept moments ago: a restart does not sweep again.
+				stamp(t - 10); ctx = {}
+				inform._maybe_scan_neighbours(cfg, ctx)
+				t = t + 120
+				assert_false(inform._maybe_scan_neighbours(cfg, ctx), "not due")
+				-- No stamp (a reboot), or one from the future: a full interval.
+				os.remove(F); ctx = {}
+				inform._maybe_scan_neighbours(cfg, ctx)
+				t = t + 899
+				assert_false(inform._maybe_scan_neighbours(cfg, ctx), "no stamp: the interval from this start")
+				stamp(t + 5000); ctx = {}
+				inform._maybe_scan_neighbours(cfg, ctx)
+				t = t + 120
+				assert_false(inform._maybe_scan_neighbours(cfg, ctx), "a stamp from the future is no stamp")
+			end)
+			inform._time, inform._scan_all_radios, inform._read_file = o_time, o_all, o_read
+			os.remove(F)
+			if not ok then error(err, 0) end
 		end
 	},
 	{

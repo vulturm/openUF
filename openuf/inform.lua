@@ -8089,6 +8089,22 @@ function M._scan_requested()
 	return due
 end
 
+-- When the last sweep started, in RAM: the interval has to outlive a daemon
+-- restart. It counted from each start, so a run of restarts closer together
+-- than the interval (a day of hotpatches, or pushes) never swept at all: on a
+-- hAP ac at 900 s no sweep ran for over 40 minutes, the siblings only a sweep
+-- finds aged out of nrlist.REMEMBER, and every 802.11k list lost its 2.4 GHz
+-- neighbours until the next one. An overdue sweep waits SCAN_SETTLE after a
+-- start, for hostapd's ACS and the clients' reconnects.
+M.SCAN_STAMP_FILE = "/tmp/openuf-last-scan"
+M.SCAN_SETTLE     = 120
+
+local function scan_started(ctx, now)
+	ctx.last_scan = now
+	local f = io.open(M.SCAN_STAMP_FILE, "w")
+	if f then f:write(string.format("%.0f\n", now)); f:close() end
+end
+
 function M._maybe_scan_neighbours(cfg, ctx, st)
 	-- A sweep still in its chunks is never started over, and a due time is
 	-- left in the file until it can run: the second of the hour's two scans
@@ -8098,20 +8114,27 @@ function M._maybe_scan_neighbours(cfg, ctx, st)
 	-- whatever the interval option says and even on the first pass.
 	if M._scan_requested() then
 		io.stderr:write("inform: 11k-scan requested -- scanning every radio\n")
-		ctx.last_scan = M._time()
+		scan_started(ctx, M._time())
 		return M._scan_all_radios(cfg, st) > 0
 	end
 	local every = tonumber(cfg and cfg.config and cfg.config.neighbour_scan_interval)
 	if not every or every <= 0 then return false end
 	local now = M._time()
 	-- Never on the first pass: hostapd's own ACS scan is still running at
-	-- boot, and a restart must not cost every client a stall.
-	if not ctx.last_scan then ctx.last_scan = now; return false end
+	-- boot, and a restart must not cost every client a stall. A stamp from
+	-- the future is a clock that has since been corrected: no stamp.
+	if not ctx.last_scan then
+		local prev = tonumber((M._read_file(M.SCAN_STAMP_FILE) or ""):match("%d+"))
+		ctx.last_scan = (prev and prev <= now) and prev or now
+		ctx.scan_not_before = now + M.SCAN_SETTLE
+		return false
+	end
+	if ctx.scan_not_before and now < ctx.scan_not_before then return false end
 	if now - ctx.last_scan < every then return false end
 	-- (A sweep still in its chunks returned above: the interval counts from
 	-- the start of one sweep to the start of the next, and a sweep takes
 	-- ~11 heartbeats across two radios.)
-	ctx.last_scan = now
+	scan_started(ctx, now)
 	return M._scan_all_radios(cfg, st) > 0
 end
 
