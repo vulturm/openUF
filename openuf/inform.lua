@@ -1606,9 +1606,16 @@ function M.build_json(st, cfg, ufhw)
 			-- This VAP's WiFi Experience tally (see sat_tallies above).
 			local sat = M._satisfaction
 			local tally = sat.tally()
-			sat_tallies[#sat_tallies + 1] = tally
-			sat_tallies_by_radio[vap.radio_name] = sat_tallies_by_radio[vap.radio_name] or {}
-			table.insert(sat_tallies_by_radio[vap.radio_name], tally)
+			-- A backhaul VAP's stations are the parent or mesh children, not
+			-- clients: UniFi's radio and device scores leave them out (xan-sufra's
+			-- 96 is its seven clients' mean, its mesh child not among them).
+			-- Counted, xan-bc's idle 5 GHz radio scored 95 off its own uplink,
+			-- and the device 92 against its only client's 90.
+			if not is_backhaul_vap then
+				sat_tallies[#sat_tallies + 1] = tally
+				sat_tallies_by_radio[vap.radio_name] = sat_tallies_by_radio[vap.radio_name] or {}
+				table.insert(sat_tallies_by_radio[vap.radio_name], tally)
+			end
 			-- tx failed counts dropped frames on most drivers but failed
 			-- attempts on mt76 (satisfaction.failed_is_dropped/dropped).
 			local failed_is_dropped = sat.failed_is_dropped(

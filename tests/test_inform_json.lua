@@ -3084,6 +3084,23 @@ return {
 		end
 	},
 	{
+		-- xan-bc meshed: its uplink's one "station" is the parent, which
+		-- scored 95 into an idle 5 GHz radio and lifted the device off its
+		-- only client's 90. UniFi's roll-ups are clients only.
+		name = "inform json: a backhaul vap's stations stay out of the radio and device scores",
+		fn = function()
+			local d = build({with_uci = true, with_clients = true,
+				vap_patch = function(vaps) vaps[1].usage = "uplink" end})
+			assert_true(d.vap_table[1].satisfaction >= 0, "the vap itself is still scored")
+			assert_eq(d.satisfaction, -1, "no client: no device score")
+			for _, r in ipairs(d.radio_table) do
+				if r.athstats then
+					assert_eq(r.athstats.satisfaction, -1, "nor a radio score")
+				end
+			end
+		end
+	},
+	{
 		name = "inform json: satisfaction is -1, not absent or zero, when nothing is connected",
 		fn = function()
 			-- 0 would read as "terrible experience". The firmware sends -1,
