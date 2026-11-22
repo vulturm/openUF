@@ -476,8 +476,8 @@ end
 
 -- Ask one station for a full sweep. mode 1 is ACTIVE measurement: the client
 -- probes rather than only listening, which is what makes it report BSSes on
--- channels it is not sitting on. channel 255 means "every channel in this
--- operating class". op_class defaults to 115 (5 GHz U-NII-1); dual-band
+-- channels it is not sitting on. channel 255, the default, means "every
+-- channel in this operating class"; opts.channel names one. op_class defaults to 115 (5 GHz U-NII-1); dual-band
 -- clients observed upstream ignored its band restriction and answered for
 -- 2.4 GHz too, but a 2.4 GHz-only client answers it with report mode 0x02
 -- ("incapable") and nothing else -- seen live on AP2 -- so the caller
@@ -491,9 +491,9 @@ function M.request(ifname, sta, opts)
 	opts = opts or {}
 	local cmd = string.format(
 		"ubus call hostapd.%s rrm_beacon_req " ..
-		"'{\"addr\":\"%s\",\"mode\":%d,\"op_class\":%d,\"channel\":255,\"duration\":%d}' " ..
+		"'{\"addr\":\"%s\",\"mode\":%d,\"op_class\":%d,\"channel\":%d,\"duration\":%d}' " ..
 		">/dev/null 2>&1",
-		ifname, sta, opts.mode or 1, opts.op_class or 115, opts.duration or 50)
+		ifname, sta, opts.mode or 1, opts.op_class or 115, opts.channel or 255, opts.duration or 50)
 	M._exec(cmd)
 	return true
 end

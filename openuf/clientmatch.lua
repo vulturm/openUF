@@ -12,13 +12,18 @@
 	  1. A client's signal here stays under FLOOR for HOLD seconds, it has been
 	     associated for MIN_CONNECTED seconds, and it was not steered within
 	     COOLDOWN.
-	  2. It is asked for a beacon report (rrmscan.request) for its own
-	     sub-band -- clients that can make one only (rrm capability bits) and
-	     that take BSS Transition requests, at most once per REQUEST_GAP.
-	  3. Its answer (rrmscan.harvest's per-station view) names a BSS of this
-	     BSS's 802.11k neighbour list -- the site's other APs on the same SSID
-	     and this AP's other band -- that the client hears DIFF_DB louder than
-	     it hears this one, and above FLOOR.
+	  2. It is asked for beacon reports (rrmscan.request) on its own channel and
+	     on each channel of this BSS's 802.11k neighbour list, one channel per
+	     heartbeat -- clients that can make one only (rrm capability bits) and
+	     that take BSS Transition requests, at most one round per REQUEST_GAP.
+	     A request names one operating class, and a client on 36 asked for
+	     its own never measured a parent on 124 or anything on 2.4 GHz.
+	  3. Its answers (rrmscan.harvest's per-station view) name a BSS of that
+	     list -- the site's other APs on the same SSID and this AP's other
+	     band -- that the client hears DIFF_DB louder than it hears this one,
+	     and above FLOOR. Never a lower band: 2.4 GHz carries further, so a
+	     5 GHz client at -72 nearly always hears it 8 dB louder and would be
+	     moved to the slower band for it.
 	  4. It gets a BSS Transition request naming that BSS. Not "disassociation
 	     imminent", and nothing follows it: a client that stays, stays. This
 	     only tells a client what it could not see for itself.
@@ -48,11 +53,13 @@ M.HOLD           = 20     -- s under FLOOR before asking
 M.MIN_CONNECTED  = 60     -- s associated before acting (a fresh join settles first)
 M.COOLDOWN       = 300    -- s between steers of one client
 M.REQUEST_GAP    = 120    -- s between beacon requests to one client
-M.REPORT_MAX_AGE = 60     -- s a report is trusted for
+M.REPORT_MAX_AGE = 120    -- s a report is trusted for: a round of MAX_CHANNELS at a ~20 s heartbeat
+M.MAX_CHANNELS   = 5      -- channels measured in one round, the client's own included
 M.FORGET         = 600    -- s unseen before a client's state is dropped
 M.VALIDITY       = 100    -- beacon intervals the request holds
 
--- [mac] = {below_since, asked_at, acted_at, seen_at}
+-- [mac] = {below_since, asked_at, asking, acted_at, seen_at}; asking: the
+-- round's channels still to request.
 M._state = {}
 
 local function is_ifname(s) return type(s) == "string" and s:match("^[%w%-%._]+$") ~= nil end
@@ -73,6 +80,46 @@ local function own_bssid(ifname)
 	return mac and mac:lower() or nil
 end
 
+-- Operating class and channel of a neighbour report element: BSSID (6 bytes),
+-- BSSID information (4), then one byte each.
+local function nr_channel(hex)
+	if type(hex) ~= "string" or #hex < 26 or not hex:match("^%x+$") then return nil end
+	return tonumber(hex:sub(21, 22), 16), tonumber(hex:sub(23, 24), 16)
+end
+
+-- 1 = 2.4 GHz, 2 = 5 GHz, 3 = 6 GHz, by global operating class; nil unknown.
+local function band_rank(op)
+	if not op then return nil end
+	if op >= 81 and op <= 84 then return 1 end
+	if op >= 115 and op <= 130 then return 2 end
+	if op >= 131 and op <= 137 then return 3 end
+	return nil
+end
+
+-- The round of beacon requests for one client: its own channel first, then
+-- each distinct channel of a neighbour it could be steered to. Empty with no
+-- such neighbour: nothing to compare, so no client is sent off-channel.
+function M.channels_to_ask(o, nr, own)
+	local rank, ch = band_rank(o.op_class), tonumber(o.channel)
+	if not (rank and ch) then return {} end
+	local out, seen = {{op_class = o.op_class, channel = ch}}, {[o.op_class .. "/" .. ch] = true}
+	local any = false
+	for _, e in ipairs(type(nr) == "table" and nr or {}) do
+		local b = type(e) == "table" and e[1]
+		local op, c = nr_channel(type(e) == "table" and e[3])
+		local r = band_rank(op)
+		if is_mac(b) and b:lower() ~= own and c and r and r >= rank then
+			any = true
+			local key = op .. "/" .. c
+			if not seen[key] and #out < M.MAX_CHANNELS then
+				seen[key] = true
+				out[#out + 1] = {op_class = op, channel = c}
+			end
+		end
+	end
+	return any and out or {}
+end
+
 -- The best neighbour for one client, or nil. heard: {[bssid] = {signal,
 -- seen_at}} from its report; nr: this BSS's rrm_nr_list entries.
 function M.pick(obs, heard, nr, own, now, diff_db, floor)
@@ -85,11 +132,14 @@ function M.pick(obs, heard, nr, own, now, diff_db, floor)
 	local mine = own and heard[own]
 	if not (mine and now - mine.seen_at <= M.REPORT_MAX_AGE) then return nil end
 	local here = mine.signal
+	local rank = band_rank(obs.op_class)
+	if not rank then return nil end
 	local best, best_sig
 	for _, e in ipairs(type(nr) == "table" and nr or {}) do
 		local b, hex = type(e) == "table" and e[1], type(e) == "table" and e[3]
 		local h = is_mac(b) and heard[b:lower()]
-		if h and b:lower() ~= own and type(hex) == "string" and hex:match("^%x+$")
+		local there = band_rank((nr_channel(hex)))
+		if h and b:lower() ~= own and there and there >= rank
 				and now - h.seen_at <= M.REPORT_MAX_AGE
 				and h.signal >= floor and h.signal >= here + diff_db
 				and (not best_sig or h.signal > best_sig) then
@@ -162,7 +212,7 @@ function M.tick(observations, now, opts)
 			M._state[mac] = cs
 			cs.seen_at = now
 			if signal >= M.FLOOR then
-				cs.below_since = nil
+				cs.below_since, cs.asking = nil, nil
 			else
 				cs.below_since = cs.below_since or now
 				local ready = now - cs.below_since >= M.HOLD
@@ -172,7 +222,10 @@ function M.tick(observations, now, opts)
 				if ready then
 					own_cache[o.ifname] = own_cache[o.ifname] or own_bssid(o.ifname) or false
 					local own = own_cache[o.ifname] or nil
-					local best = M.pick(o, reports[mac] or {}, nr_of(o.ifname), own, now, opts.diff_db)
+					-- Not in the middle of a round: the first channel to answer
+					-- is not yet the best one.
+					local best = not cs.asking
+						and M.pick(o, reports[mac] or {}, nr_of(o.ifname), own, now, opts.diff_db)
 					if best then
 						if opts.on_steer then pcall(opts.on_steer, mac) end
 						M._exec(string.format(
@@ -184,10 +237,18 @@ function M.tick(observations, now, opts)
 						sent = sent + 1
 						M._log(("%s on %s hears %s at %d dBm, here at %d: asked to move there")
 							:format(mac, o.ifname, best.bssid, best.signal, best.here))
-					elseif (not cs.asked_at or now - cs.asked_at >= M.REQUEST_GAP)
-							and opts.request and o.op_class and capable(o.ifname, mac) then
-						cs.asked_at = now
-						pcall(opts.request, o.ifname, mac, {op_class = o.op_class})
+					else
+						if not cs.asking and (not cs.asked_at or now - cs.asked_at >= M.REQUEST_GAP)
+								and opts.request and capable(o.ifname, mac) then
+							local round = M.channels_to_ask(o, nr_of(o.ifname), own)
+							if #round > 0 then cs.asked_at, cs.asking = now, round end
+						end
+						-- One per heartbeat: a client measures one request at a
+						-- time, and each takes it off its channel.
+						if cs.asking then
+							pcall(opts.request, o.ifname, mac, table.remove(cs.asking, 1))
+							if #cs.asking == 0 then cs.asking = nil end
+						end
 					end
 				end
 			end

@@ -1681,11 +1681,12 @@ function M.build_json(st, cfg, ufhw)
 						threshold = vap.roam_assist_rssi,
 					}
 				elseif steer_on and not below_minrssi and sta.signal then
-					-- The beacon request's operating class follows the BSS's
-					-- band, as _rrm_tick's does: 81 on 2.4 GHz, 115 on 5 GHz.
+					-- The client's own channel and operating class, the first
+					-- of its round of beacon requests (clientmatch.channels_to_ask).
 					steer_obs[#steer_obs + 1] = {
 						ifname = ifname, ssid = vap.essid, mac = sta.mac,
 						signal = sta.signal, connected_sec = sta.connected_sec,
+						channel = vap.channel,
 						op_class = M._clientmatch and M._clientmatch.op_class(vap.channel, vap.radio),
 					}
 				end
