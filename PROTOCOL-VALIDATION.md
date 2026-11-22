@@ -1563,9 +1563,15 @@ Parallel to `radio_table` — the real controller's own split of static config v
 combined `cu_self`), `cu_interf`, plus `spectrum_table` / `spectrum_table_time` when a
 `spectrum-scan` cmd has populated `M._spectrum_cache`.
 
-All `cu_*` are percentages derived from `iw dev <ifname> survey dump`;
+`cu_total` and `cu_self_tx` are percentages derived from `iw dev <ifname> survey dump`;
 `cu_interf = max(0, cu_total − cu_self_rx − cu_self_tx)` — airtime busy for reasons other than
 this radio's own tx/rx.
+
+`cu_self_rx` is the receive airtime of the radio's own stations (`rx duration` in `iw station
+dump`, across every netdev on the phy), not the survey's `channel receive time`: ath9k counts
+every frame it decodes there, the neighbours' included, which reported a crowded channel as 1 %
+interference. Where stations receive frames and the driver accounts no airtime (ath10k prints
+`rx duration: 0 us`), the survey's receive time is kept, and it is an over-count.
 
 > **`iw` survey field names.** The real binary prints `channel active time:`,
 > `channel busy time:`, `channel receive time:`, `channel transmit time:` — *not*
@@ -1828,7 +1834,9 @@ Per `scan_table[]` entry — the consumer DTO `com.ubnt.service.aO.bLwwMKkr` (li
 
 | Field | Notes |
 |---|---|
-| `mac`, `bssid`, `essid`, `channel`, `freq`, `signal`, `rssi`, `security` | |
+| `mac`, `bssid`, `essid`, `channel`, `freq`, `signal`, `security` | |
+| **`rssi`, `noise`** | As a U7 reports them in `stat/rogueap`: `rssi` is dB over a fixed −96 floor, never below 0 (−87 dBm is 9), with `noise` −96. Sent as dBm, every row read as under the noise floor to anything ranking neighbours by `rssi`. |
+| **`center_freq`** | The centre of the whole channel block, from the HT/VHT operation elements. Absent where they do not say (6 GHz, or a 40 MHz width with no side named). Overlap between two BSSes cannot be told from the primary channel alone. |
 | `radio`, `radio_name` | |
 | **`band`** | A field **distinct from `radio`** but taking the identical enum values. The Environment tab's list selector applies an *unconditional* filter upstream of every visible sidebar filter: `A.filter(A=>!!T.R?.[A?.band]?.[A?.bw>0?A.bw:m.L?.[A?.band]])`. `T.R[undefined]` is `undefined`, so an entry without `band` fails silently for every row — indistinguishable from "no data", regardless of filter state. |
 | **`bw`** | Channel width MHz. The "Ch. Width" cell reads it directly and renders nothing when falsy: `renderCell:({bw:A})=>A?…:null`. Parsed from `iw`'s `BSS operating channel width: N MHz` (only present for HE/VHT-capable neighbours), defaulting to `20` — legacy-safe and valid on both bands. |
@@ -2950,7 +2958,7 @@ through the real UI with the resulting wire payload captured or the effect verif
 | 60 | U-APSD / Group Rekey / per-WLAN 802.11k | `wireless.<n>.uapsd`, `aaa.<n>.wpa.group_rekey`, `aaa.<n>.11k.status` → `uapsd`, `wpa_group_rekey`, `ieee80211k` + `rrm_*_report` | ⚠️ Adopted 2026-10-18, firmware-confirmed by upstream for 4.0.15. With the controller's default (U-APSD off) SSIDs no longer advertise it. **AP2's first push, 2026-10-18:** `uapsd` 1 on two WLANs and 0 on one, `wpa_group_rekey=0` on all three, `ieee80211k=1` on all three -- this site's wire, written to UCI |
 | 61 | 802.11r key holders and PMK-R1 push | `aaa.<n>.iapp_key` → wildcard `r0kh`/`r1kh`; `pmk_r1_push=1`, `reassociation_deadline=3000`; `rrbguard.lua` | ⚠️ Adopted 2026-10-18 (upstream's hostapd-template reading + their office AP's stale-socket incident). Without the key OpenWrt derives one from the passphrase, which anyone with the passphrase can compute. **AP2's first push, 2026-10-18:** both FT WLANs got their `r0kh`/`r1kh` pair, `pmk_r1_push=1` and the 3000 TU deadline. An FT roam between AP1 and AP2 on this build not yet observed (AP1 not yet on it) |
 | 62 | Forget tears the controller's config down | `setdefault` / `reset-inform` → `ucihelper.forget`, `switchvlan.restore`, usteer off, LED back | ⚠️ Adopted 2026-10-18: a forgotten AP has no controller SSID, VLAN bridge, radio extra, per-port VLAN or cron job left, without a reboot; the inform URL that reached the controller is kept (an L3 re-adopt over the default host name fails HTTP 400, upstream 2026-10-11). Row 10's caveat (no `setdefault` ever seen on this wire) still stands |
-| 63 | WiFi Experience, the firmware's formula | `sta_table[].satisfaction`/`satisfaction_reason`/`anomalies`, `vap_table[].anomalies_bar_chart`/`reasons_bar_chart`, `radio_table[].athstats.satisfaction`, device `satisfaction` (−1 with no clients) | ⚠️ Adopted 2026-10-18 (`satisfaction.lua`, ported by upstream from `libubnt.so` 4.0.15). Replaces this tree's estimate; the Experience column on AP1/AP2 not yet compared against the previous build |
+| 63 | WiFi Experience, the firmware's formula | `sta_table[].satisfaction`/`satisfaction_reason`/`anomalies`, `vap_table[].anomalies_bar_chart`/`reasons_bar_chart`, `radio_table[].athstats.satisfaction`, device `satisfaction` (−1 with no clients) | ⚠️ Adopted 2026-10-18 (`satisfaction.lua`, ported by upstream from `libubnt.so` 4.0.15). Replaces this tree's estimate; the Experience column on AP1/AP2 not yet compared against the previous build **The phy term is U7 firmware's** (`calc_sta_satisfaction`, `libubnt` BZ2.8.8.14): none below 4800 MHz, straight lines between table points above, 100 from 150 Mbit/s. The rate judged is still the mean of the last tx and rx rates, because the U7's own input is a driver counter mac80211 has no copy of. The radio and device roll-ups leave backhaul VAPs out, as a U7's do. |
 | 64 | Client fields as the firmware sends them | `rssi` (SNR), `noise`, `state` `0x10`, `is_11r`, `tx_retries`, `wifi_tx_dropped`; `wifi_tx_attempts` = frames sent (retries counted in since row 77); no `capacity`/`throughput`/`linkscore`/`multicast` | ⚠️ Adopted 2026-10-18. Power save is absent on mt76 (the driver takes PS tracking over). The `linkscore`/`multicast` open question is closed: the firmware never sends them |
 | 65 | `sys_stats`, vap `extchannel`, windowed channel utilisation | `sys_stats.loadavg_1/5/15` + `mem_*` bytes; `vap_table[].extchannel` (±1); `cu_*` over the last inform | ⚠️ Adopted 2026-10-18: the UI's Load Average and the 40 MHz side come from these; utilisation no longer reports a lifetime average |
 | 66 | STUN wake-up | `mgmt_cfg stun_url` → `stun.lua` (RFC 3489 Binding Request with CHANGE-REQUEST every 30 s); `connect_request_ip`/`connect_request_port` in the inform; a type `0x8888` datagram ends the sleep | ⚠️ Adopted 2026-10-18; upstream confirmed it against their 10.6 controller (commands land within a second). Resolves REVERSE-ENGINEERING.md Investigation 3. **AP2, 2026-10-18: this UCG Ultra answered the first Binding Request** -- a 56-byte Binding Response from `192.168.1.1:3478` to AP2's port on the wire, and the next inform carried `connect_request_ip` = AP2's own address and port 32777 (so the 2026-09-15 silence was the missing CHANGE-REQUEST attribute, as upstream said). The wake datagram itself not yet watched |
