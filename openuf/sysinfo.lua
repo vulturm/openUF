@@ -644,7 +644,10 @@ end
 -- on too: a mesh downlink (the hidden vwire BSS a child joins) beacons 0x28
 -- where the same AP's client WLANs beacon 0x00 -- read off a U7-IW's and a
 -- U7-Lite's downlinks, wired and one hop out alike -- and UniFi firmware
--- reports such a BSS with is_vwire/is_meshv3 (see inform.lua).
+-- reports such a BSS with is_vwire/is_meshv3 (see inform.lua). A downlink
+-- also carries tag 0x87, one byte: how many wireless hops its AP is from the
+-- wire (0 on the wired U7-IW, 1 on the U7-Lite meshed under it).
+-- backhaul.follow_preferred_parent uses it.
 local function ucode_bytes(hex)
 	return (hex:gsub("(%x%x)", "\\x%1"))
 end
@@ -663,6 +666,10 @@ function M.peer_match_ucode()
 		.. 'return null;}'
 		.. 'function pf(d){if(length(d)<7||ord(d,0)!=0||ord(d,1)!=0x15||ord(d,2)!=0x6d)return 0;'
 		.. 'return ord(d,6);}'
+		.. 'function ph(d){let n=length(d);if(n<11||ord(d,0)!=0||ord(d,1)!=0x15||ord(d,2)!=0x6d)return -1;'
+		.. 'for(let i=11;i+2<=n;i+=2+ord(d,i+1)){'
+		.. 'if(ord(d,i)==0x87&&ord(d,i+1)==1&&i+3<=n)return ord(d,i+2);}'
+		.. 'return -1;}'
 end
 
 -- The reader's last line, printed once it has walked the whole scan cache.
@@ -677,9 +684,9 @@ function M.peer_scan_cmd(ifname)
 		.. 'let nl=require("nl80211");'
 		.. 'let r=nl.request(nl.const.NL80211_CMD_GET_SCAN,nl.const.NLM_F_DUMP,{dev:"' .. ifname .. '"});'
 		.. 'for(let x in (r||[])){let b=x.bss;if(!b)continue;'
-		.. 'for(let l in [b.information_elements||[],b.beacon_ies||[]]){let hit=null,fl=0;'
-		.. 'for(let e in l){if(e.type==221){hit=pm(e.data);if(hit){fl=pf(e.data);break;}}}'
-		.. 'if(hit){print(b.bssid," ",hit," ",fl,"\\n");break;}}}'
+		.. 'for(let l in [b.information_elements||[],b.beacon_ies||[]]){let hit=null,fl=0,hp=-1;'
+		.. 'for(let e in l){if(e.type==221){hit=pm(e.data);if(hit){fl=pf(e.data);hp=ph(e.data);break;}}}'
+		.. 'if(hit){print(b.bssid," ",hit," ",fl," ",hp,"\\n");break;}}}'
 		.. 'if(r!=null)print("' .. M.PEER_SCAN_DONE .. '\\n");'
 	return "ucode -e '" .. script .. "' 2>/dev/null"
 end
@@ -688,21 +695,25 @@ end
 -- the sibling-AP element, and whether the reader ran to its end: without the
 -- closing line (no ucode, no nl80211 module, killed) a BSS missing from the
 -- map is unknown, not a stranger. Third: {bssid = the UniFi element's flags
--- byte}, for the BSSes that carry it.
+-- byte}, fourth {bssid = its hop count}, for the BSSes that carry them.
 function M.peer_macs(ifname)
 	local cmd = M.peer_scan_cmd(ifname)
-	if not cmd then return {}, false, {} end
+	if not cmd then return {}, false, {}, {} end
 	local out = M._run_cmd(cmd) or ""
-	local peers, flags = {}, {}
+	local peers, flags, hops = {}, {}, {}
 	for line in out:gmatch("[^\n]+") do
-		local bssid, mac, fl = line:match(
-			"^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) ?(%d*)")
+		local bssid, mac, rest = line:match(
+			"^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)(.*)")
 		if bssid then
-			peers[bssid:lower()] = mac:lower()
-			if fl ~= "" then flags[bssid:lower()] = tonumber(fl) end
+			local b = bssid:lower()
+			peers[b] = mac:lower()
+			local fl, hp = rest:match("^ (%d+) ?(%-?%d*)")
+			if fl then flags[b] = tonumber(fl) end
+			hp = tonumber(hp)
+			if hp and hp >= 0 then hops[b] = hp end
 		end
 	end
-	return peers, out:find(M.PEER_SCAN_DONE, 1, true) ~= nil, flags
+	return peers, out:find(M.PEER_SCAN_DONE, 1, true) ~= nil, flags, hops
 end
 
 -- A UniFi mesh downlink: flags 0x28 (bits 0x08 and 0x20, both seen set on
@@ -725,11 +736,14 @@ end
 M._peer_cache = {}
 
 local function peer_tag(ifname, nets)
-	local peers, _, flags = M.peer_macs(ifname)
+	local peers, _, flags, hops = M.peer_macs(ifname)
 	for _, n in ipairs(nets) do
 		local b = n.bssid:lower()
 		n.peer_mac = peers[b]
-		if n.peer_mac and M.is_mesh_downlink_flags(flags and flags[b]) then n.mesh_downlink = true end
+		if n.peer_mac and M.is_mesh_downlink_flags(flags and flags[b]) then
+			n.mesh_downlink = true
+			n.mesh_hop = hops and hops[b]
+		end
 	end
 end
 

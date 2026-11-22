@@ -1033,12 +1033,13 @@ return {
 			-- the older two-field shape still tags the sibling.
 			with_fixtures({}, {
 				["scan dump"] = fixture("iw_scan_dump.txt"),
-				["ucode -e"]  = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:20 40\n"
-					.. "AA:BB:CC:DD:EE:02 00:00:5E:00:53:20 0\n" .. sysinfo.PEER_SCAN_DONE .. "\n",
+				["ucode -e"]  = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:20 40 1\n"
+					.. "AA:BB:CC:DD:EE:02 00:00:5E:00:53:20 0 -1\n" .. sysinfo.PEER_SCAN_DONE .. "\n",
 			}, function()
 				local nets = sysinfo.scan_table("wlan0")
 				assert_eq(nets[1].peer_mac, "00:00:5e:00:53:20", "still the sibling")
 				assert_eq(nets[1].mesh_downlink, true, "flags 0x28: a mesh downlink")
+				assert_eq(nets[1].mesh_hop, 1, "tag 0x87: one hop out")
 				assert_nil(nets[2].mesh_downlink, "flags 0: a client WLAN")
 			end)
 			with_fixtures({}, {
