@@ -485,16 +485,22 @@
 			const asked = items().length > 0;
 			if (r.usteer)
 				rows.push(h('div', { class: 'notice warn' }, h('span', { html: ICON.info }), h('div', {},
-					h('strong', {}, 'usteer runs because the controller asks for:'),
+					h('strong', {}, 'usteer carries out, because “Use usteer” is on:'),
 					asked ? h('ul', { class: 'todo' }, items())
 						: h('p', { class: 'todo' }, 'Band Steering or Roaming Assistant.'),
-					h('p', { class: 'todo' }, 'Turn off the switch below to stop usteer on this access point only, or turn these off in the controller for the whole site.'))));
+					h('p', { class: 'todo' }, 'Turn off “Use usteer” below and openUF carries these out itself, keeping the UniFi access points in the neighbour lists.'))));
+			else if (asked && value('controller_steering', '1') === '1')
+				rows.push(h('div', { class: 'notice' }, h('span', { html: ICON.info }), h('div', {},
+					h('strong', {}, 'openUF carries out, from the controller:'), h('ul', { class: 'todo' }, items()),
+					h('p', { class: 'todo' }, 'Clients that support 802.11k and 802.11v are asked to move. Nobody is disconnected.'))));
 			// This AP alone; the controller keeps both on for the others
 			// (inform._local_steering_gate). A push applies it: the daemon asks
 			// for one when the option changes.
 			rows.push(row('Follow the controller\'s steering',
-				'Run usteer for Band Steering and Roaming Assistant when the controller turns them on. Off, this access point ignores both and openUF keeps the neighbour lists; other access points go on steering, and the controller still shows both as on here. 802.11k, 802.11v and fast roaming stay on. Takes effect within a minute.',
+				'Carry out Band Steering and Roaming Assistant when the controller turns them on. Off, this access point ignores both; other access points go on steering, and the controller still shows both as on here. 802.11k, 802.11v and fast roaming stay on. Takes effect within a minute.',
 				toggle('controller_steering', '1', ro), { inline: true }));
+			rows.push(row('Use usteer', 'Carry them out with usteer instead of openUF. For a site with only OpenWrt access points, or with clients without 802.11k. usteer does not know genuine UniFi access points and removes them from the neighbour lists.',
+				toggle('use_usteer', '0', ro || value('controller_steering', '1') !== '1'), { inline: true }));
 			// roamassist.lua reads it each time it judges a client; usteer's
 			// own thresholds are untouched. Only while this AP follows the
 			// controller's Roaming Assistant.
@@ -515,7 +521,7 @@
 		// is back in force the moment usteer stops.
 		const usteerOwns = !!(r && r.usteer);
 		rows.push(row('openUF\'s neighbour list', usteerOwns
-			? 'Inactive while usteer keeps the lists. Turn off “Follow the controller\'s steering” above to use it.'
+			? 'Inactive while usteer keeps the lists. Turn off “Use usteer” above to use it.'
 			: 'Answer 802.11k requests with the site\'s other access points, so clients roam to the right one.',
 			toggle('neighbour_list', '1', ro || usteerOwns), { inline: true }));
 		for (const b of (r && r.bss) || []) {
@@ -541,7 +547,7 @@
 		// clientmatch.lua: read every heartbeat. It needs the clients' beacon
 		// reports, which "Ask clients to scan" also collects; the collection
 		// runs for it on its own.
-		rows.push(row('Steer clients to a better access point', 'A client that stays on a weak signal here is asked which access points it hears, and when one of the site\'s others (or this one\'s other band) is clearly louder, it is asked to move there. A request, never a disconnect. Only networks without the controller\'s Roaming Assistant, and only clients that support it.',
+		rows.push(row('Steer clients on every network', 'What Band Steering and Roaming Assistant turn on for their networks, on all of them: a client on a weak signal, or on 2.4 GHz with a good 5 GHz in reach, is asked which access points it hears and then asked to move. A request, never a disconnect. Only clients that support it.',
 			toggle('client_steering', '0', ro), { inline: true }));
 		// handover.lua: read at each push, so it applies to the next reload.
 		rows.push(row('Move clients before a Wi-Fi restart', 'When a change from the controller restarts a network here, first ask its clients to roam to a neighbouring access point. They leave while this one still holds their fast-roaming keys, so the move is quick instead of a full reconnect. Clients that ignore the request are dropped by the restart, as before.',
