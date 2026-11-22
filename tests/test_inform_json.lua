@@ -11,6 +11,7 @@ local inform = dofile("openuf/inform.lua")
 -- staip.lua shells out to nft; a test must never touch the host's tables.
 inform._staip._exec = function() return 0 end
 inform._staip._popen = function() return "" end
+inform.STA_HEARD_FILE = os.tmpname()
 
 -- build_json looks the inform URL's host up; keep the suite off the network.
 inform._dns_toip = function() return nil end

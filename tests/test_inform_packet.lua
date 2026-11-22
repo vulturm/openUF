@@ -10,6 +10,7 @@ local inform = dofile("openuf/inform.lua")
 -- staip.lua shells out to nft; a test must never touch the host's tables.
 inform._staip._exec = function() return 0 end
 inform._staip._popen = function() return "" end
+inform.STA_HEARD_FILE = os.tmpname()
 -- The sweep's stamp goes to a scratch file; each test that reads it removes it.
 inform.SCAN_STAMP_FILE = os.tmpname()
 os.remove(inform.SCAN_STAMP_FILE)
@@ -7072,6 +7073,24 @@ return {
 			-- A pair's own status line is not the device's.
 			assert_nil(inform._parse_bandsteering_system_cfg(pairs_blk),
 				"bandsteering.<n>.status is not bandsteering.status")
+		end
+	},
+	{
+		name = "inform: what clients report hearing is written for a monitor, only on a new report",
+		fn = function()
+			local F, saved = inform.STA_HEARD_FILE, inform._sta_reports
+			os.remove(F)
+			inform._sta_reports = {}
+			inform._note_sta_reports(nil, 100)
+			assert_nil(io.open(F, "r"), "no report: no file")
+			inform._note_sta_reports({["a8:db:03:35:45:cc"] = {["00:00:5e:00:53:01"] = {signal = -58, seen_at = 100}}}, 100)
+			local f = io.open(F, "r")
+			assert_not_nil(f, "written")
+			local t = require("cjson").decode(f:read("*a")); f:close()
+			assert_eq(t["a8:db:03:35:45:cc"]["00:00:5e:00:53:01"].signal, -58, "the level")
+			assert_eq(t["a8:db:03:35:45:cc"]["00:00:5e:00:53:01"].seen_at, 100, "and when")
+			inform._sta_reports = saved
+			os.remove(F)
 		end
 	},
 	{

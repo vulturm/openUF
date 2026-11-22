@@ -8429,6 +8429,22 @@ function M._note_sta_reports(by_sta, now)
 		end
 		if not any then M._sta_reports[sta] = nil end
 	end
+	if type(by_sta) == "table" and next(by_sta) ~= nil then M._write_sta_heard() end
+end
+
+-- The same table in RAM for a monitor to read over SSH, rewritten only when a
+-- report came in (tmp + rename: a reader never sees half a file). The
+-- controller has no field for what a client hears.
+M.STA_HEARD_FILE = "/tmp/openuf-heard.json"
+function M._write_sta_heard()
+	local ok, js = pcall(cjson.encode, M._sta_reports)
+	if not ok then return false end
+	local tmp = M.STA_HEARD_FILE .. ".tmp"
+	local f = io.open(tmp, "w")
+	if not f then return false end
+	f:write(js)
+	f:close()
+	return os.rename(tmp, M.STA_HEARD_FILE) and true or false
 end
 
 -- One cycle of the client-assisted enrichment: keep the notification
