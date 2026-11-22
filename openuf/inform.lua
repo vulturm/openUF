@@ -900,6 +900,9 @@ function M.build_json(st, cfg, ufhw)
 	-- fail off-target, so individual calls are still pcall-wrapped below)
 	local ufuci = M._ucihelper
 	local own_uci_pass = false
+	-- The backhaul SSID, read once per payload by the scan pass below for a
+	-- sibling's hidden mesh downlink (false: none configured).
+	local mesh_essid = nil
 	if ufuci and ufuci.get_vap_table then
 		-- One `ubus call network.wireless status` for the whole payload:
 		-- every get_ifname_for_radio/vap below (one per VAP in get_vap_table,
@@ -1290,6 +1293,31 @@ function M.build_json(st, cfg, ufhw)
 							local e = scan_table[#scan_table]
 							e.is_unifi = true
 							e.serialno = net.peer_mac
+							-- A mesh downlink (sysinfo.is_mesh_downlink_flags),
+							-- reported as UniFi firmware reports one: both flags,
+							-- and the backhaul SSID the hidden BSS beacons
+							-- blank. Without them a sibling's downlink went out
+							-- as a nameless hidden network, and the controller
+							-- offered only the current parent as this AP's
+							-- uplink.
+							if net.mesh_downlink then
+								e.is_vwire, e.is_meshv3 = true, true
+								if (e.essid == nil or e.essid == "") then
+									if mesh_essid == nil then
+										mesh_essid = false
+										local ok_m, secs = pcall(function()
+											local t = ufuci.backhaul_uplink_sections()
+											if #t == 0 then t = ufuci.backhaul_downlink_sections() end
+											return t
+										end)
+										local sx = ok_m and type(secs) == "table" and secs[1]
+										if sx and type(sx.ssid) == "string" and sx.ssid ~= "" then
+											mesh_essid = sx.ssid
+										end
+									end
+									if mesh_essid then e.essid = mesh_essid end
+								end
+							end
 						end
 					end
 					-- 802.11k enrichment: BSSes a CLIENT went off-channel

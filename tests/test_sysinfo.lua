@@ -1027,6 +1027,38 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: scan_table() marks a UniFi mesh downlink from the element's flags",
+		fn = function()
+			-- 0x28 on a downlink, 0 on the same AP's client WLAN; a reader of
+			-- the older two-field shape still tags the sibling.
+			with_fixtures({}, {
+				["scan dump"] = fixture("iw_scan_dump.txt"),
+				["ucode -e"]  = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:20 40\n"
+					.. "AA:BB:CC:DD:EE:02 00:00:5E:00:53:20 0\n" .. sysinfo.PEER_SCAN_DONE .. "\n",
+			}, function()
+				local nets = sysinfo.scan_table("wlan0")
+				assert_eq(nets[1].peer_mac, "00:00:5e:00:53:20", "still the sibling")
+				assert_eq(nets[1].mesh_downlink, true, "flags 0x28: a mesh downlink")
+				assert_nil(nets[2].mesh_downlink, "flags 0: a client WLAN")
+			end)
+			with_fixtures({}, {
+				["scan dump"] = fixture("iw_scan_dump.txt"),
+				["ucode -e"]  = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:20\n",
+			}, function()
+				local nets = sysinfo.scan_table("wlan0")
+				assert_eq(nets[1].peer_mac, "00:00:5e:00:53:20", "no flags field: still a sibling")
+				assert_nil(nets[1].mesh_downlink, "...and not a downlink")
+			end)
+			assert_eq(sysinfo.is_mesh_downlink_flags(0x28), true, "0x28")
+			assert_eq(sysinfo.is_mesh_downlink_flags(0x08), false, "one bit alone is not enough")
+			assert_eq(sysinfo.is_mesh_downlink_flags(0x20), false, "nor the other")
+			assert_eq(sysinfo.is_mesh_downlink_flags(nil), false, "no flags")
+			local cmd = sysinfo.peer_scan_cmd("phy0-sta0")
+			assert_true(cmd:find("fl=pf(e.data)", 1, true) ~= nil, "flags read off the element that matched")
+			assert_true(cmd:find("return ord(d,6);", 1, true) ~= nil, "body offset 6, after OUI and 00 01 01")
+		end
+	},
+	{
 		name = "sysinfo: peer_scan_cmd() matches exactly the element peer_ie_hex() builds",
 		fn = function()
 			local hex = sysinfo.peer_ie_hex("00:00:5E:00:53:20")

@@ -640,7 +640,11 @@ end
 --   dd <len> | 00 15 6d | 00 01 01 (UniFi AP) | flags | 01 02 <system id>
 --            | TLVs from body offset 11: 81 06 <serialno = device MAC>, ...
 -- The TLVs are walked, not indexed: current firmware adds tags 4.0.15 did not
--- have (0x89, a UUID). Only the tag-0x81 MAC is used; the flags are ignored.
+-- have (0x89, a UUID). The tag-0x81 MAC names the AP. The flags byte is passed
+-- on too: a mesh downlink (the hidden vwire BSS a child joins) beacons 0x28
+-- where the same AP's client WLANs beacon 0x00 -- read off a U7-IW's and a
+-- U7-Lite's downlinks, wired and one hop out alike -- and UniFi firmware
+-- reports such a BSS with is_vwire/is_meshv3 (see inform.lua).
 local function ucode_bytes(hex)
 	return (hex:gsub("(%x%x)", "\\x%1"))
 end
@@ -657,6 +661,8 @@ function M.peer_match_ucode()
 		.. 'for(let i=11;i+2<=n;i+=2+ord(d,i+1)){'
 		.. 'if(ord(d,i)==0x81&&ord(d,i+1)==6&&i+8<=n)return mac(d,i+2);}'
 		.. 'return null;}'
+		.. 'function pf(d){if(length(d)<7||ord(d,0)!=0||ord(d,1)!=0x15||ord(d,2)!=0x6d)return 0;'
+		.. 'return ord(d,6);}'
 end
 
 -- The reader's last line, printed once it has walked the whole scan cache.
@@ -671,9 +677,9 @@ function M.peer_scan_cmd(ifname)
 		.. 'let nl=require("nl80211");'
 		.. 'let r=nl.request(nl.const.NL80211_CMD_GET_SCAN,nl.const.NLM_F_DUMP,{dev:"' .. ifname .. '"});'
 		.. 'for(let x in (r||[])){let b=x.bss;if(!b)continue;'
-		.. 'for(let l in [b.information_elements||[],b.beacon_ies||[]]){let hit=null;'
-		.. 'for(let e in l){if(e.type==221){hit=pm(e.data);if(hit)break;}}'
-		.. 'if(hit){print(b.bssid," ",hit,"\\n");break;}}}'
+		.. 'for(let l in [b.information_elements||[],b.beacon_ies||[]]){let hit=null,fl=0;'
+		.. 'for(let e in l){if(e.type==221){hit=pm(e.data);if(hit){fl=pf(e.data);break;}}}'
+		.. 'if(hit){print(b.bssid," ",hit," ",fl,"\\n");break;}}}'
 		.. 'if(r!=null)print("' .. M.PEER_SCAN_DONE .. '\\n");'
 	return "ucode -e '" .. script .. "' 2>/dev/null"
 end
@@ -681,17 +687,31 @@ end
 -- {bssid = identity MAC} for every BSS in ifname's scan cache that carries
 -- the sibling-AP element, and whether the reader ran to its end: without the
 -- closing line (no ucode, no nl80211 module, killed) a BSS missing from the
--- map is unknown, not a stranger.
+-- map is unknown, not a stranger. Third: {bssid = the UniFi element's flags
+-- byte}, for the BSSes that carry it.
 function M.peer_macs(ifname)
 	local cmd = M.peer_scan_cmd(ifname)
-	if not cmd then return {}, false end
+	if not cmd then return {}, false, {} end
 	local out = M._run_cmd(cmd) or ""
-	local peers = {}
-	for bssid, mac in out:gmatch(
-			"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)") do
-		peers[bssid:lower()] = mac:lower()
+	local peers, flags = {}, {}
+	for line in out:gmatch("[^\n]+") do
+		local bssid, mac, fl = line:match(
+			"^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) ?(%d*)")
+		if bssid then
+			peers[bssid:lower()] = mac:lower()
+			if fl ~= "" then flags[bssid:lower()] = tonumber(fl) end
+		end
 	end
-	return peers, out:find(M.PEER_SCAN_DONE, 1, true) ~= nil
+	return peers, out:find(M.PEER_SCAN_DONE, 1, true) ~= nil, flags
+end
+
+-- A UniFi mesh downlink: flags 0x28 (bits 0x08 and 0x20, both seen set on
+-- every downlink and on no client WLAN; which of the two means what is not
+-- known, so both are required).
+function M.is_mesh_downlink_flags(fl)
+	fl = tonumber(fl)
+	if not fl then return false end
+	return math.floor(fl / 8) % 2 == 1 and math.floor(fl / 32) % 2 == 1
 end
 
 -- The reader is a ucode fork that loads the nl80211 module, run per radio on
@@ -705,8 +725,12 @@ end
 M._peer_cache = {}
 
 local function peer_tag(ifname, nets)
-	local peers = M.peer_macs(ifname)
-	for _, n in ipairs(nets) do n.peer_mac = peers[n.bssid:lower()] end
+	local peers, _, flags = M.peer_macs(ifname)
+	for _, n in ipairs(nets) do
+		local b = n.bssid:lower()
+		n.peer_mac = peers[b]
+		if n.peer_mac and M.is_mesh_downlink_flags(flags and flags[b]) then n.mesh_downlink = true end
+	end
 end
 
 -- Returns a table of neighboring wireless networks visible to ifname, by
