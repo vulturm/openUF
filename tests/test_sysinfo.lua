@@ -1802,6 +1802,29 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: radio_sta_airtime() reads every netdev on the phy, rx duration included",
+		fn = function()
+			local function dump(mac, us, pk)
+				return table.concat({"Station " .. mac .. " (on x)", "\trx packets:\t" .. pk,
+					"\tconnected time:\t40 seconds", "\trx duration:\t" .. us .. " us"}, "\n") .. "\n"
+			end
+			with_fixtures({["/sys/class/net/phy1-ap0/phy80211/name"] = "phy1\n"}, {
+				["device/net"] = "phy1-ap0\nphy1-ap2-20\n",
+				["dev phy1-ap0 station"] = "",
+				["dev phy1-ap2-20 station"] = dump("00:00:5e:00:53:01", 18384, 12),
+			}, function()
+				local a = sysinfo.radio_sta_airtime("phy1-ap0")
+				local s = a["phy1-ap2-20/00:00:5e:00:53:01"]
+				assert_eq(s.rx_us, 18384, "a station on a sibling netdev of the phy")
+				assert_eq(s.rx_packets, 12, "with its packets")
+				assert_eq(s.connected_sec, 40, "and how long it has been there")
+			end)
+			with_fixtures({["/sys/class/net/phy1-ap0/phy80211/name"] = "phy1\n"}, {}, function()
+				assert_nil(sysinfo.radio_sta_airtime("phy1-ap0"), "no netdev listed: unknown, not empty")
+			end)
+		end
+	},
+	{
 		name = "sysinfo: _phy_info() caches `iw phy` per phy and re-reads after the TTL",
 		fn = function()
 			-- Tens of kilobytes parsed per radio per heartbeat, for data that

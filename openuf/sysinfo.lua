@@ -343,6 +343,9 @@ local STA_FIELDS = {
 	["tx failed"]      = {"tx_failed",     "tx failed:%s+(%d+)",  true},
 	["inactive time"]  = {"inactive_ms",   "inactive time:%s+(%d+)"},
 	["connected time"] = {"connected_sec", "connected time:%s+(%d+)"},
+	-- Airtime mac80211 accounted to this station (AIRTIME_RX/TX), in us.
+	-- Printed as 0 by a driver that never reports it (ath10k, seen live).
+	["rx duration"]    = {"rx_duration_us", "rx duration:%s+(%d+)"},
 }
 -- "tx bitrate"/"rx bitrate" -> the patterns and fields of that direction.
 local BITRATE = {}
@@ -400,6 +403,35 @@ function M.sta_table(ifname)
 	end
 	if cur then clients[#clients + 1] = cur end
 	return clients
+end
+
+-- The receive airtime of a radio's own stations, for cu_self_rx: every
+-- netdev on ifname's phy (the AP VAPs and a wireless uplink's station), each
+-- station as {rx_us, rx_packets, connected_sec}, keyed "netdev/mac". nil when
+-- the phy cannot be named.
+--
+-- The survey's "channel receive time" is not this. ath9k counts every frame
+-- it decodes there, the neighbours' beacons and traffic included: xan-bc's
+-- 2.4 GHz radio, one idle client and 40 networks in earshot, reported 17% of
+-- 18% busy as its own receive, so the controller and anything reading
+-- cu_interf saw 1% interference on the most crowded channel in the house.
+function M.radio_sta_airtime(ifname)
+	if type(ifname) ~= "string" or not ifname:match("^[%w%._-]+$") then return nil end
+	local phy = (M._read_file("/sys/class/net/" .. ifname .. "/phy80211/name") or ""):match("^%s*(phy%d+)")
+	if not phy then return nil end
+	local out, devs = {}, 0
+	local list = M._run_cmd("ls /sys/class/ieee80211/" .. phy .. "/device/net 2>/dev/null") or ""
+	for dev in list:gmatch("[%w%._-]+") do
+		devs = devs + 1
+		for _, c in ipairs(M.sta_table(dev)) do
+			out[dev .. "/" .. c.mac] = {rx_us = c.rx_duration_us, rx_packets = c.rx_packets,
+				connected_sec = c.connected_sec}
+		end
+	end
+	-- ifname itself is on that phy: an empty listing is a failed read, and
+	-- reading it as "no stations" would report 0% own receive.
+	if devs == 0 then return nil end
+	return out
 end
 
 -- The kernel driver behind a wireless netdev ("ath9k", "ath10k_pci",

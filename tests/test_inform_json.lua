@@ -3251,6 +3251,49 @@ return {
 		end
 	},
 	{
+		-- xan-bc, 2.4 GHz on ath9k: the survey's receive time counts every
+		-- frame decoded, the neighbours' included, so it read 17% "own" receive
+		-- of 18% busy with one idle client and 40 networks in earshot.
+		name = "inform json: cu_self_rx is the stations' rx airtime, the survey's only where the driver has none",
+		fn = function()
+			local o_rs, o_sa = inform._sysinfo.radio_stats, inform._sysinfo.radio_sta_airtime
+			local cur, sta
+			inform._sysinfo.radio_stats = function() return {cur} end
+			inform._sysinfo.radio_sta_airtime = function() return sta end
+			local function at(active, busy, rx, tx, stations)
+				cur = {freq = 2462, in_use = true, noise = -94, channel_time = active,
+				       channel_time_busy = busy, channel_time_rx = rx, channel_time_tx = tx}
+				sta = stations
+				local a = build({with_uci = true, with_clients = true}).radio_table[1].athstats
+				return a.cu_self_rx, a.cu_interf
+			end
+			inform._cu_cache = {}
+			local K = "phy1-ap0/00:00:5e:00:53:01"
+			at(100000, 18000, 17000, 400, {[K] = {rx_us = 50000, rx_packets = 900, connected_sec = 3600}})
+			-- next 10 s: 2 s busy, 1.7 s of it received, 100 ms of that our client's
+			local rx, interf = at(110000, 20000, 18700, 440,
+				{[K] = {rx_us = 150000, rx_packets = 1000, connected_sec = 3610}})
+			assert_eq(rx, 1, "the client's 100 ms of 10 s, not the survey's 17%")
+			assert_eq(interf, 19, "the rest of the busy time is the neighbours'")
+			-- a station that joined inside the window counts whole
+			rx = at(120000, 22000, 20400, 480, {[K] = {rx_us = 150000, rx_packets = 1000, connected_sec = 3620},
+				["phy1-ap1/00:00:5e:00:53:02"] = {rx_us = 300000, rx_packets = 50, connected_sec = 5}})
+			assert_eq(rx, 3, "the newcomer's 300 ms")
+			-- no stations at all: nothing of the receive time is ours
+			rx, interf = at(130000, 24000, 22100, 520, {})
+			assert_eq(rx, 0, "no station, no own receive")
+			assert_eq(interf, 20, "all of the busy time but our beacons")
+			-- ath10k: frames received, rx duration 0 -- keep the survey's figure
+			rx = at(140000, 26000, 23800, 560, {["phy0-sta0/00:00:5e:00:53:03"] =
+				{rx_us = 0, rx_packets = 5000, connected_sec = 9000}})
+			rx = at(150000, 28000, 25500, 600, {["phy0-sta0/00:00:5e:00:53:03"] =
+				{rx_us = 0, rx_packets = 6000, connected_sec = 9010}})
+			assert_eq(rx, 17, "unaccounted: the survey's receive time, as before")
+			inform._sysinfo.radio_stats, inform._sysinfo.radio_sta_airtime = o_rs, o_sa
+			inform._cu_cache = {}
+		end
+	},
+	{
 		-- supportsRoamTopologyStats() is hasWifiCapability2(8192) (10.6.106).
 		-- With it the controller takes roams only from this AP's roam reports,
 		-- so it is claimed exactly while those are sent: when the controller

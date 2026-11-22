@@ -757,6 +757,31 @@ local function _in_use_survey(stats)
 	return stats[1]
 end
 
+-- Milliseconds of receive airtime the radio's own stations took in a window
+-- of `active` ms, from mac80211's per-station rx duration: the delta against
+-- `prev` for a station seen last time, the whole count for one that joined
+-- inside the window, nothing for one whose earlier share cannot be told
+-- apart (first reading of a long-connected station). nil when the driver
+-- does not account it -- stations received frames and none of them gained a
+-- microsecond (ath10k prints rx duration 0) -- and the caller keeps the
+-- survey's receive time, an over-count, rather than reporting 0.
+local function _self_rx_ms(sta, prev, active)
+	if type(sta) ~= "table" then return nil end
+	local us, packets, accounted = 0, 0, false
+	for key, c in pairs(sta) do
+		local p = prev and prev[key]
+		local rx, pk = c.rx_us or 0, c.rx_packets or 0
+		if rx > 0 then accounted = true end
+		if p and rx >= (p.rx_us or 0) and pk >= (p.rx_packets or 0) then
+			us, packets = us + rx - (p.rx_us or 0), packets + pk - (p.rx_packets or 0)
+		elseif (c.connected_sec or math.huge) * 1000 <= active or not prev then
+			us, packets = us + rx, packets + pk
+		end
+	end
+	if packets > 0 and not accounted then return nil end
+	return us / 1000
+end
+
 -- Channel utilisation (cu_total/cu_self_rx/cu_self_tx, percent) over the
 -- time since the previous inform, not since the radio came up.
 --
@@ -773,13 +798,18 @@ end
 -- everything since that restart. A reading with no new active time (two
 -- builds within the same millisecond, or a driver that stalls the counters)
 -- repeats the previous result rather than inventing 0%.
-local function _windowed_cu(name, s)
+--
+-- cu_self_rx is the radio's own stations' receive airtime (sta, from
+-- sysinfo.radio_sta_airtime) when the driver accounts it, the survey's
+-- receive time otherwise -- see _self_rx_ms for why they differ.
+local function _windowed_cu(name, s, sta)
 	local now = {
 		freq   = s.freq,
 		active = s.channel_time or 0,
 		busy   = s.channel_time_busy or 0,
 		rx     = s.channel_time_rx or 0,
 		tx     = s.channel_time_tx or 0,
+		sta    = sta,
 	}
 	local prev = name and M._cu_cache[name]
 	local d = now
@@ -797,6 +827,8 @@ local function _windowed_cu(name, s)
 			tx     = now.tx - prev.tx,
 		}
 	end
+	local self_rx = _self_rx_ms(sta, d ~= now and prev.sta or nil, d.active)
+	if self_rx then d.rx = math.min(d.rx, self_rx) end
 	local function pct(x)
 		if d.active <= 0 then return 0 end
 		return math.min(100, math.floor(x * 100 / d.active + 0.5))
@@ -1153,7 +1185,9 @@ function M.build_json(st, cfg, ufhw)
 				end
 				if in_use then
 					-- in_use: the channel the radio is actually on
-					local cu_total, cu_self_rx, cu_self_tx = _windowed_cu(radio.name, in_use)
+					local ok_sa, sta_air = pcall(M._sysinfo.radio_sta_airtime, ifname)
+					local cu_total, cu_self_rx, cu_self_tx = _windowed_cu(radio.name, in_use,
+						ok_sa and sta_air or nil)
 					local entry = {
 						name        = radio.name,
 						channel     = radio.channel,
