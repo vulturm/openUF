@@ -1273,7 +1273,7 @@ function M.build_json(st, cfg, ufhw)
 							band       = radio.radio,
 							channel    = net.channel,
 							freq       = net.freq,
-							rssi       = net.signal,
+							center_freq = net.center_freq,
 							signal     = net.signal,
 							-- The Environment tab's "Ch. Width" column reads
 							-- this directly and renders nothing at all when
@@ -1363,6 +1363,16 @@ function M.build_json(st, cfg, ufhw)
 								skip       = rrm_skip,
 								site_ssids = rrm_site,
 							})
+					end
+					-- rssi as UniFi firmware sends it in this table: dB over a
+					-- fixed -96 floor (signal 9 = -87 dBm), with noise -96.
+					-- It went out as dBm, so every neighbour this AP heard
+					-- read as below the noise floor to anything ranking
+					-- stat/rogueap rows by rssi, and the AP showed no
+					-- contending neighbours at all.
+					for _, e in ipairs(scan_table) do
+						e.rssi  = M._satisfaction.snr(e.signal, nil)
+						e.noise = M._satisfaction.NOISE_FLOOR_MIN
 					end
 					scan_radio_table[#scan_radio_table + 1] = {
 						radio      = radio.radio,

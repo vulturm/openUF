@@ -881,7 +881,7 @@ function M.merge_into(entries, neighbours, opts)
 				band       = opts.radio,
 				channel    = n.channel,
 				freq       = M.freq_of_channel(n.channel),
-				rssi       = n.signal,
+				-- rssi (dB over the -96 floor) is set by inform.lua for every row.
 				signal     = n.signal,
 				-- What the report proved (parse_report), and nothing more.
 				--

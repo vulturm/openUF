@@ -801,6 +801,29 @@ function M.channel_width(vht_w, vht_seg1, vht_seg2, ht_sec)
 	return 20
 end
 
+-- Centre of a BSS's whole channel block in MHz, from the same evidence as
+-- channel_width. stat/rogueap's consumers place a neighbour by it: without it
+-- an overlap check has only the primary channel and called every 40 MHz
+-- neighbour clear of us. nil where the elements do not say (6 GHz, or a width
+-- read off iw's summary line with no operation element behind it).
+function M.center_freq(freq, bw, vht_seg1, vht_seg2, ht_sec)
+	if not freq then return nil end
+	if bw == 20 then return freq end
+	if bw == 40 then
+		if ht_sec == "above" then return freq + 10 end
+		if ht_sec == "below" then return freq - 10 end
+		return nil
+	end
+	if (bw == 80 or bw == 160) and freq > 5000 and freq < 5925 then
+		-- 160 in the modern encoding: segment 1 is the primary 80's centre,
+		-- segment 2 the whole block's.
+		local seg = vht_seg1
+		if bw == 160 and vht_seg2 and vht_seg2 > 0 then seg = vht_seg2 end
+		if seg and seg > 0 then return 5000 + 5 * seg end
+	end
+	return nil
+end
+
 -- scan dump key -> what that line sets: on the BSS (cur) or in the per-BSS
 -- evidence (ev) that flush() resolves into bw and security.
 local SCAN_LINE = {
@@ -908,6 +931,7 @@ function M.scan_table(ifname)
 		if not cur.bw then
 			cur.bw = M.channel_width(ev.vht_w, ev.vht_seg1, ev.vht_seg2, ev.ht_sec)
 		end
+		cur.center_freq = M.center_freq(cur.freq, cur.bw, ev.vht_seg1, ev.vht_seg2, ev.ht_sec)
 		if ev.rsn then cur.security = "wpa2"
 		elseif ev.wpa then cur.security = "wpa"
 		elseif ev.privacy then cur.security = "wep"

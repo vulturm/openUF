@@ -1792,6 +1792,12 @@ return {
 				assert_eq(by["fortyonly"].bw, 40, "HT with a secondary channel is 40")
 				assert_eq(by["twenty"].bw, 20, "HT with no secondary is 20")
 				assert_eq(by["summary"].bw, 40, "an explicit summary line is authoritative")
+				assert_eq(by["The SCP Foundation"].center_freq, 5250, "160: the block's centre is segment 2")
+				assert_eq(by["Bhaktha Reddy 5G"].center_freq, 5210, "80: segment 1")
+				assert_eq(by["noncontig"].center_freq, 5210, "80+80: the primary segment's centre")
+				assert_eq(by["fortyonly"].center_freq, 2422, "HT40 above: primary + 10")
+				assert_eq(by["twenty"].center_freq, 2437, "20: the primary itself")
+				assert_nil(by["summary"].center_freq, "40 with no side named: no centre claimed")
 			end)
 		end
 	},
