@@ -1476,7 +1476,7 @@ function M.build_json(st, cfg, ufhw)
 		local steer_on = cfg and cfg.config and cfg.config.client_steering == true
 			and not M._usteer_steering
 		local steer_obs = {}
-		local staip_devs = {}
+		local staip_devs, staip_stas = {}, {}
 		-- Associated clients per band ("ng", "na", "6e"), for _write_status.
 		local client_counts = {}
 		-- Minimum RSSI: one observation per station on a radio that has it
@@ -1612,6 +1612,9 @@ function M.build_json(st, cfg, ufhw)
 			-- The netdevs whose ARP staip.lua learns client addresses from.
 			if not is_backhaul_vap then
 				for _, dev in ipairs(ok_if and ifnames or {}) do staip_devs[dev] = true end
+				for _, sta in ipairs(stas) do
+					if type(sta.mac) == "string" then staip_stas[sta.mac:lower()] = true end
+				end
 			end
 			-- Clients per band for the status file (the portal's public page):
 			-- a mesh child behind a downlink is not a client.
@@ -2003,7 +2006,7 @@ function M.build_json(st, cfg, ufhw)
 				 end})
 		end
 		M._client_counts = client_counts
-		M._staip_devs = staip_devs
+		M._staip_devs, M._staip_stas = staip_devs, staip_stas
 		if M._clientmatch and #steer_obs > 0 then
 			local rrm = M._rrmscan
 			pcall(M._clientmatch.tick, steer_obs, now, {
@@ -6635,7 +6638,7 @@ function M._forget_controller(prev, cfg)
 	M._shape_obs = nil
 	if M._staip then
 		pcall(M._staip.teardown)
-		M._staip_devs = nil
+		M._staip_devs, M._staip_stas = nil, nil
 	end
 	-- What held SSIDs down for the controller's features starts over: the
 	-- reset cleared the persisted lists (sched_vaps_down, guest_vaps_down)
@@ -7599,7 +7602,7 @@ end
 -- Once a minute: the client-address table (staip.lua), on the VAPs of the
 -- last payload.
 function M._staip_resync()
-	if M._staip then return M._staip.tick(M._time(), M._staip_devs) end
+	if M._staip then return M._staip.tick(M._time(), M._staip_devs, M._staip_stas) end
 end
 
 -- Once a minute: IGMP/MLD snooping on the LAN bridge and openUF's VLAN

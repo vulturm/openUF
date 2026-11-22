@@ -62,4 +62,22 @@ return {
 			end)
 		end
 	},
+	{
+		name = "staip: a silent client keeps its address while associated, and loses it on leaving",
+		fn = function()
+			local listing = "elements = { " .. A .. " . 192.168.20.19 expires 9m, " .. B .. " . 192.168.20.5 expires 9m }"
+			with_nft(listing, function()
+				staip._ifs = {["phy1-ap0"] = true}
+				local devs = {["phy1-ap0"] = true}
+				staip.tick(100, devs, {[A] = true, [B] = true})
+				assert_eq(staip.ip(A), "192.168.20.19", "learned")
+				staip._popen = function() return "table bridge openuf_staip { set sta_ips { } }" end
+				staip.tick(100 + staip.READ_EVERY, devs, {[A] = true})
+				assert_eq(staip.ip(A), "192.168.20.19", "its set entry expired, it is still here")
+				assert_nil(staip.ip(B), "gone from the AP: forgotten")
+				staip.tick(100 + 2 * staip.READ_EVERY, devs, {})
+				assert_nil(staip.ip(A), "and once it leaves too")
+			end)
+		end
+	},
 }

@@ -101,8 +101,12 @@ local function install()
 	return ok
 end
 
--- Once a minute. devs: {[netdev] = true}, the client VAPs of the last payload.
-function M.tick(now, devs)
+-- Once a minute. devs: {[netdev] = true}, the client VAPs of the last payload;
+-- stas: {[mac] = true}, the clients on them. An idle phone can go longer than
+-- the set's timeout without one ARP (over four minutes seen on xan-bc), so a
+-- client keeps its last address for as long as it stays associated: without
+-- that its IP would blink on and off in the controller.
+function M.tick(now, devs, stas)
 	if type(devs) ~= "table" or next(devs) == nil or now < M._next then return false end
 	M._next = now + M.READ_EVERY
 	local text = M._popen("nft list set " .. M.NFT_TABLE .. " sta_ips 2>/dev/null") or ""
@@ -110,7 +114,11 @@ function M.tick(now, devs)
 		M._ips, M._ifs = {}, {}
 		if not install() then return false end
 	else
-		M._ips = M.parse(text)
+		local learned = M.parse(text)
+		for mac, ip in pairs(M._ips) do
+			if not learned[mac] and type(stas) == "table" and stas[mac] then learned[mac] = ip end
+		end
+		M._ips = learned
 	end
 	local add = {}
 	for dev in pairs(devs) do
