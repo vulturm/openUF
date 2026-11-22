@@ -129,6 +129,17 @@ function public_status() {
 		}
 	}
 
+	// The channel each band is on (channels=ng:1,na:124), the same way.
+	let channels = null;
+	if (type(h.channels) == 'string') {
+		channels = {};
+		for (let p in split(h.channels, ',')) {
+			const kv = split(p, ':');
+			if (length(kv) == 2 && match(kv[0], /^[a-z0-9]+$/) && match(kv[1], /^[0-9]+$/))
+				channels[kv[0]] = int(kv[1]);
+		}
+	}
+
 	public_cache = {
 		hostname: sys.hostname ?? null,
 		model: first_line('/tmp/sysinfo/model'),
@@ -143,6 +154,7 @@ function public_status() {
 		now: s.now ?? time(),
 		uptime: up ? int(split(up, ' ')[0]) : null,
 		clients: clients,
+		channels: channels,
 		running: shell_ok('/etc/init.d/openuf running')
 	};
 	public_at = time();

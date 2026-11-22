@@ -230,7 +230,10 @@
 			// when Local Settings hide it.
 			p.clients ? fact('Clients', String(Object.values(p.clients).reduce((a, b) => a + b, 0)), {
 				sub: Object.keys(p.clients).sort().map(b => p.clients[b] + ' on ' + ({ ng: '2.4 GHz', na: '5 GHz', '6e': '6 GHz' }[b] || b)).join(' · ')
-			}) : null
+			}) : null,
+			// The channel each band is on now, from the daemon's heartbeat.
+			p.channels && Object.keys(p.channels).length ? fact('Channels', Object.keys(p.channels).sort()
+				.map(b => ({ ng: '2.4 GHz', na: '5 GHz', '6e': '6 GHz' }[b] || b) + ': ' + p.channels[b]).join(' · ')) : null
 		);
 		$('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	}
@@ -306,45 +309,21 @@
 		setTimeout(() => pw.focus(), 50);
 	}
 
-	// Each radio as configured (network.wireless status: what the controller
-	// pushed) and as running (iwinfo on one of its interfaces, the station
-	// first: on a wireless uplink that is the channel the parent dictates).
-	// Read when the page opens, nothing the daemon has to keep.
-	async function loadRadios() {
-		const ws = await ubus(sid, 'network.wireless', 'status');
-		const out = [];
-		for (const [name, r] of Object.entries(ws || {})) {
-			const ifs = (r.interfaces || []).filter(i => i.ifname);
-			const sta = ifs.find(i => i.config && i.config.mode === 'sta');
-			const pick = sta || ifs[0];
-			let info = null;
-			if (pick) info = await ubus(sid, 'iwinfo', 'info', { device: pick.ifname }).catch(() => null);
-			const c = r.config || {};
-			out.push({ name, band: c.band, disabled: !!r.disabled || c.disabled === '1' || c.disabled === true,
-				set: c.channel, htmode: c.htmode,
-				channels: Array.isArray(c.channels) ? c.channels.join(' ') : (c.channels || ''),
-				uplink: !!sta, up: !!r.up,
-				channel: info && info.channel, frequency: info && info.frequency, live_htmode: info && info.htmode });
-		}
-		return out.sort((a, b) => a.name.localeCompare(b.name));
-	}
-
 	async function loadSettings() {
-		const [status, presets, main, web, roaming, radios] = await Promise.all([
+		const [status, presets, main, web, roaming] = await Promise.all([
 			ubus(sid, 'luci.openuf', 'getStatus'),
 			ubus(sid, 'luci.openuf', 'listPresets'),
 			ubus(sid, 'uci', 'get', { config: 'openuf', section: 'main' }).catch(() => null),
 			ubus(sid, 'uci', 'get', { config: 'openuf', section: 'web' }).catch(() => null),
 			// An older backend has no getRoaming: the group then shows the
 			// switch alone.
-			ubus(sid, 'luci.openuf', 'getRoaming').catch(() => null),
-			loadRadios().catch(() => null)
+			ubus(sid, 'luci.openuf', 'getRoaming').catch(() => null)
 		]);
 		// No `main` section: openUF was installed from the tarball and runs
 		// from conf.lua. Creating the section would put UCI in charge of the
 		// daemon with almost nothing in it, so those fields stay read-only.
 		settings = {
-			status, presets, roaming, radios,
+			status, presets, roaming,
 			hasMain: !!(main && main.values),
 			hasWeb: !!(web && web.values),
 			values: Object.assign({}, main && main.values, web && web.values)
@@ -630,29 +609,6 @@
 		// The controller's Environment view.
 		const scanSteps = steps('neighbour_scan_interval', '0', [{ value: '0', label: 'Never' }, { value: '300', label: 'Every 5 minutes' },
 			{ value: '900', label: 'Every 15 minutes' }, { value: '3600', label: 'Every hour' }], v => 'Every ' + v + ' s');
-		if (settings.radios && settings.radios.length) {
-			const BAND = { '2g': '2.4 GHz', '5g': '5 GHz', '6g': '6 GHz', '60g': '60 GHz' };
-			const width = m => { const n = /(\d+)$/.exec(m || ''); return n ? n[1] + ' MHz' : (m || ''); };
-			const scanEvery = Number(value('neighbour_scan_interval', '0'));
-			groups.push(h('div', { class: 'group card' },
-				h('div', { class: 'group-title' }, 'Radios'),
-				...settings.radios.map(r => {
-					const set = (r.set == null || r.set === 'auto' || r.set === '0') ? 'automatic' : 'channel ' + r.set;
-					const lines = ['Set: ' + set + (r.htmode ? ' · ' + r.htmode : '')];
-					if (r.disabled) lines.push('The radio is off.');
-					else if (r.channel) {
-						lines.push('In use: channel ' + r.channel + (r.live_htmode ? ' · ' + width(r.live_htmode) : ''));
-						if (r.uplink && String(r.channel) !== String(r.set)) lines.push('It follows the channel of the wireless uplink\'s parent.');
-					}
-					lines.push(r.channels ? 'Allowed channels: ' + r.channels : 'Allowed channels: every channel legal here');
-					lines.push(r.uplink ? 'Neighbour scan: never on this radio, it carries the wireless uplink.'
-						: scanEvery > 0 ? 'Neighbour scan: every ' + Math.round(scanEvery / 60) + ' min, a few channels at a time.'
-						: 'Neighbour scan: off.');
-					return row((BAND[r.band] || r.band || '') + ' (' + r.name + ')', lines.join(' '),
-						h('span', { class: 'value' }, r.disabled ? 'Off' : r.channel ? 'Ch ' + r.channel : '—'), { inline: true });
-				})));
-		}
-
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Radio environment'),
 			row('Ask clients to scan', 'Have one capable client at a time report the networks it hears. The access point never leaves its channel; the client does, for about a second.', toggle('rrm_enrichment', '1', ro), { inline: true }),
