@@ -792,4 +792,51 @@ return {
 			assert_eq(sets, 0, "no channel 195 written")
 		end
 	},
+	{
+		name = "backhaul: follow_preferred_parent() roams to the named parent's downlink, once per ROAM_EVERY",
+		fn = function()
+			local o_popen, o_exec, o_log = backhaul._popen, backhaul._exec, backhaul._log
+			local cmds = {}
+			backhaul._popen = function() return "Connected to 8e:78:48:06:03:fd (on phy0-sta0)\n" end
+			backhaul._exec = function(c) cmds[#cmds + 1] = c; return 0 end
+			backhaul._log = function() end
+			backhaul._roam_at = nil
+			local ssid = "vwire-edac2772347aef1a"
+			local scan = {
+				{bssid = "8e:78:48:06:03:fd", essid = ssid, signal = -64, age = 0, peer_mac = "84:78:48:06:03:f9"},
+				-- the parent's client WLAN: same device, not the downlink
+				{bssid = "a8:9c:6c:b8:ab:80", essid = "corp", signal = -50, age = 0, peer_mac = "a8:9c:6c:b8:ab:7e"},
+				-- its hidden downlink
+				{bssid = "b2:9c:6c:b8:ab:80", signal = -55, age = 0, peer_mac = "a8:9c:6c:b8:ab:7e"},
+			}
+			local si = {scan_table = function() return scan end}
+			local st = {backhaul_parent = "A8:9C:6C:B8:AB:7E"}
+			assert_eq(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 1000),
+				"b2:9c:6c:b8:ab:80", "roams to the hidden downlink, not the client WLAN")
+			assert_true(cmds[1]:find("wpa_supplicant.phy0-sta0 control", 1, true) ~= nil
+				and cmds[1]:find("ROAM b2:9c:6c:b8:ab:80", 1, true) ~= nil, "ubus ROAM")
+			assert_nil(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 1000 + 60),
+				"not again within ROAM_EVERY")
+			assert_eq(#cmds, 1, "one command")
+			-- Already on it: nothing.
+			backhaul._roam_at = nil
+			backhaul._popen = function() return "Connected to b2:9c:6c:b8:ab:80 (on phy0-sta0)\n" end
+			assert_nil(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 5000), "on the parent")
+			-- Too weak, stale, or no parent named: nothing.
+			backhaul._popen = function() return "Connected to 8e:78:48:06:03:fd (on phy0-sta0)\n" end
+			scan[3].signal = -80
+			assert_nil(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 9000), "too weak")
+			scan[3].signal, scan[3].age = -55, 600
+			assert_nil(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 9000), "stale entry")
+			scan[3].age = 0
+			assert_nil(backhaul.follow_preferred_parent({backhaul_parent = ""}, "phy0-sta0", ssid, si, 9000),
+				"Auto in the controller")
+			-- Not joined: left to wpa_supplicant.
+			backhaul._popen = function() return "Not connected.\n" end
+			assert_nil(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 9000), "not joined")
+			assert_eq(#cmds, 1, "still one command")
+			backhaul._popen, backhaul._exec, backhaul._log = o_popen, o_exec, o_log
+			backhaul._roam_at = nil
+		end
+	},
 }
