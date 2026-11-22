@@ -858,6 +858,25 @@ function M._sta_vlan(dev)
 	return tonumber(br:match("^br%-openuf(%d+)$")) or 1
 end
 
+-- `chwidth` as a U7 sends it for a client, which the controller shows as
+-- channel_width: 0 = 20 MHz, 2 = 80, 3 = 160 read off mca-dump against
+-- stat/sta; 1 = 40 by the same sequence. A width with no code is not sent.
+M.CHWIDTH = {[20] = 0, [40] = 1, [80] = 2, [160] = 3}
+
+-- A client's width in MHz: the wider of its last tx and rx rates, and the
+-- widest seen in this association. One frame's rate is not the link's width
+-- (a management frame goes at 20 MHz on an 80 MHz link), and the value is a
+-- Prometheus label downstream, so it must not swing frame by frame. A lower
+-- connected time is a new association, which starts over.
+function M._sta_width(sta, prev)
+	local w = math.max(sta.tx_width or 0, sta.rx_width or 0)
+	local conn = tonumber(sta.connected_sec)
+	if prev and prev.width and prev.conn and conn and conn >= prev.conn then
+		w = math.max(w, prev.width)
+	end
+	return w > 0 and w or nil
+end
+
 -- Build the inform JSON payload.
 -- st: current state table
 -- cfg: device configuration (from conf.lua)
@@ -1755,7 +1774,9 @@ function M.build_json(st, cfg, ufhw)
 					packets = sta.tx_packets, retries = sta.tx_retries,
 					dropped = sta_dropped or 0,
 				}, now)
-				M._sta_stats_cache[sta.mac] = { time = now, sat_window = win }
+				local sta_width = M._sta_width(sta, prev)
+				M._sta_stats_cache[sta.mac] = { time = now, sat_window = win,
+					width = sta_width, conn = tonumber(sta.connected_sec) }
 				local mov = win.mov or {}
 				local satisfaction_now, satisfaction_reason, anomalies = sat.score{
 					snr = sat.snr(sta.signal_avg or sta.signal, noise),
@@ -1782,6 +1803,7 @@ function M.build_json(st, cfg, ufhw)
 					-- native network. Clients only; nil when not known.
 					ip      = not is_backhaul_vap and M._sta_ip(sta.mac) or nil,
 					vlan_id = not is_backhaul_vap and M._sta_vlan(sta_dev[sta_i]) or nil,
+					chwidth = not is_backhaul_vap and M.CHWIDTH[sta_width] or nil,
 					active     = true,
 					mac        = sta.mac,
 					-- Guest portal state; see M._guest_sta_authorized.

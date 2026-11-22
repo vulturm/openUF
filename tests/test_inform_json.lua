@@ -3091,6 +3091,44 @@ return {
 		end
 	},
 	{
+		-- A U7 sends chwidth, and the controller shows it as channel_width.
+		name = "inform json: a client's chwidth is the widest rate of its association",
+		fn = function()
+			local w = inform._sta_width
+			assert_eq(w({tx_width = 80, rx_width = 20}), 80, "the wider of the two rates")
+			assert_nil(w({}), "no rate: no width")
+			assert_eq(w({tx_width = 20, rx_width = 20, connected_sec = 70}, {width = 80, conn = 60}), 80,
+				"a 20 MHz frame on an 80 MHz link does not narrow it")
+			assert_eq(w({tx_width = 20, connected_sec = 5}, {width = 80, conn = 60}), 20,
+				"a lower connected time is a new association")
+			local o = inform._sysinfo.sta_table
+			local width = 80
+			inform._sysinfo.sta_table = function(i)
+				local t = o(i)
+				for _, c in ipairs(t) do c.tx_width, c.rx_width = width, 20 end
+				return t
+			end
+			local ok, err = pcall(function()
+				inform._sta_stats_cache = {}
+				local s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
+				assert_eq(s.chwidth, 2, "80 MHz is code 2")
+				inform._sta_stats_cache, width = {}, 160
+				s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
+				assert_eq(s.chwidth, 3, "160 MHz is code 3")
+				inform._sta_stats_cache, width = {}, 320
+				s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
+				assert_nil(s.chwidth, "a width with no known code is not sent")
+				inform._sta_stats_cache, width = {}, 80
+				s = build({with_uci = true, with_clients = true,
+					vap_patch = function(v) v[1].usage = "uplink" end}).vap_table[1].sta_table[1]
+				assert_nil(s.chwidth, "nor for a backhaul station")
+			end)
+			inform._sysinfo.sta_table = o
+			inform._sta_stats_cache = {}
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		-- As a U7's mca-dump: ip, and vlan_id 1 on the native network, 20 on a
 		-- tagged one, where the AP's own ARP cache can never name the client.
 		name = "inform json: a client carries its ip and vlan_id, a backhaul station neither",
