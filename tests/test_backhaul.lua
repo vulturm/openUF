@@ -807,17 +807,19 @@ return {
 				-- the parent's client WLAN: same device, not the downlink
 				{bssid = "a8:9c:6c:b8:ab:80", essid = "corp", signal = -50, age = 0, peer_mac = "a8:9c:6c:b8:ab:7e"},
 				-- its hidden downlink
-				{bssid = "b2:9c:6c:b8:ab:80", signal = -55, age = 0, peer_mac = "a8:9c:6c:b8:ab:7e"},
+				{bssid = "b2:9c:6c:b8:ab:80", signal = -55, age = 0, peer_mac = "a8:9c:6c:b8:ab:7e", freq = 5180},
 			}
 			local si = {scan_table = function() return scan end}
 			local st = {backhaul_parent = "A8:9C:6C:B8:AB:7E"}
 			assert_eq(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 1000),
 				"b2:9c:6c:b8:ab:80", "roams to the hidden downlink, not the client WLAN")
-			assert_true(cmds[1]:find("wpa_supplicant.phy0-sta0 control", 1, true) ~= nil
-				and cmds[1]:find("ROAM b2:9c:6c:b8:ab:80", 1, true) ~= nil, "ubus ROAM")
+			assert_eq(cmds[1], "iw dev phy0-sta0 scan freq 5180 ssid 'vwire-edac2772347aef1a' >/dev/null 2>&1",
+				"first a probe naming the hidden downlink's SSID, on its channel")
+			assert_true(cmds[2]:find("wpa_supplicant.phy0-sta0 control", 1, true) ~= nil
+				and cmds[2]:find("ROAM b2:9c:6c:b8:ab:80", 1, true) ~= nil, "then ubus ROAM")
 			assert_nil(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 1000 + 60),
 				"not again within ROAM_EVERY")
-			assert_eq(#cmds, 1, "one command")
+			assert_eq(#cmds, 2, "one probe, one roam")
 			-- Already on it: nothing.
 			backhaul._roam_at = nil
 			backhaul._popen = function() return "Connected to b2:9c:6c:b8:ab:80 (on phy0-sta0)\n" end
@@ -834,7 +836,7 @@ return {
 			-- Not joined: left to wpa_supplicant.
 			backhaul._popen = function() return "Not connected.\n" end
 			assert_nil(backhaul.follow_preferred_parent(st, "phy0-sta0", ssid, si, 9000), "not joined")
-			assert_eq(#cmds, 1, "still one command")
+			assert_eq(#cmds, 2, "still one probe and one roam")
 			backhaul._popen, backhaul._exec, backhaul._log = o_popen, o_exec, o_log
 			backhaul._roam_at = nil
 		end
@@ -886,7 +888,7 @@ return {
 			scan[2].mesh_hop, scan[2].mesh_downlink = 1, true
 			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 6000,
 				{config = {mesh_parent_auto = false}}), "mesh_parent_auto = false")
-			assert_eq(#cmds, 2, "two roams in all")
+			assert_eq(#cmds, 4, "two roams in all, each after its probe")
 			backhaul._popen, backhaul._exec, backhaul._log = o_popen, o_exec, o_log
 			backhaul._roam_at = nil
 		end

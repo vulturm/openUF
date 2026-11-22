@@ -772,7 +772,23 @@ M.ROAM_MAX_AGE = 120      -- s; a scan entry older than this may be a parent gon
 M.AUTO_MARGIN = 10        -- dB louder than the current downlink, for auto
 M._roam_at = nil
 
-local function roam(sta_if, bssid)
+-- wpa_supplicant's ROAM looks the target up in its own BSS table under the
+-- network's SSID, and a hidden downlink sits there with none: ROAM answers
+-- FAIL. Its own scans carry no SSID for the hidden BSS either (a UniFi
+-- downlink answered no wildcard probe in them, checked live), so a probe
+-- naming the backhaul SSID goes first --
+-- the downlink answers it with its name, and the scan result that
+-- wpa_supplicant receives fills it in. On the target's channel (its scan
+-- entry's freq), else the station's own.
+local function shell_quote(v)
+	return "'" .. tostring(v):gsub("'", "'\\''") .. "'"
+end
+
+local function roam(sta_if, bssid, ssid, freq)
+	if type(ssid) == "string" and ssid ~= "" then
+		M._exec("iw dev " .. sta_if .. " scan" .. (freq and (" freq " .. freq) or "")
+			.. " ssid " .. shell_quote(ssid) .. " >/dev/null 2>&1")
+	end
 	M._exec("ubus call wpa_supplicant." .. sta_if .. " control '{\"command\":\"ROAM "
 		.. bssid .. "\"}' >/dev/null 2>&1")
 end
@@ -786,10 +802,11 @@ function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now, cfg)
 	if not want and conf.mesh_parent_auto == false then return nil end
 	now = now or os.time()
 	if M._roam_at and now - M._roam_at < M.ROAM_EVERY then return nil end
-	local cur = (M._popen("iw dev " .. sta_if .. " link") or "")
-		:match("Connected to (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
+	local link = M._popen("iw dev " .. sta_if .. " link") or ""
+	local cur = link:match("Connected to (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
 	if not cur then return nil end   -- not joined: wpa_supplicant is at it
 	cur = cur:lower()
+	local freq = tonumber(link:match("freq:%s*(%d+)"))
 	local ok, entries = pcall(sysinfo.scan_table, sta_if)
 	local here, best = nil, nil
 	for _, e in ipairs((ok and type(entries) == "table") and entries or {}) do
@@ -809,11 +826,11 @@ function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now, cfg)
 				and (tonumber(e.age) or 0) <= M.ROAM_MAX_AGE then
 			if want then
 				if peer == want and (not best or sig > best.sig) then
-					best = {bssid = b, sig = sig, peer = peer}
+					best = {bssid = b, sig = sig, peer = peer, freq = tonumber(e.freq)}
 				end
 			elseif e.mesh_downlink and tonumber(e.mesh_hop)
 					and (not best or sig > best.sig) then
-				best = {bssid = b, sig = sig, peer = peer, hop = tonumber(e.mesh_hop)}
+				best = {bssid = b, sig = sig, peer = peer, hop = tonumber(e.mesh_hop), freq = tonumber(e.freq)}
 			end
 		end
 	end
@@ -826,13 +843,13 @@ function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now, cfg)
 		M._roam_at = now
 		M._log(("uplink on %s (%d dBm, %d hop(s) out): roaming to %s's downlink %s (%d dBm, %d hop(s) out)")
 			:format(cur, here.sig, here.hop, best.peer, best.bssid, best.sig, best.hop))
-		roam(sta_if, best.bssid)
+		roam(sta_if, best.bssid, ssid, best.freq or freq)
 		return best.bssid
 	end
 	M._roam_at = now
 	M._log(("uplink on %s, not on the parent %s names (%s): roaming to its downlink %s (%d dBm)")
 		:format(cur, source, want, best.bssid, best.sig))
-	roam(sta_if, best.bssid)
+	roam(sta_if, best.bssid, ssid, best.freq or freq)
 	return best.bssid
 end
 
