@@ -7156,6 +7156,30 @@ return {
 		end
 	},
 	{
+		name = "inform: the status file carries each band's channel, for the portal's public page",
+		fn = function()
+			local o_file, o_ch = inform.STATUS_FILE, inform._radio_channels
+			inform.STATUS_FILE = os.tmpname()
+			inform._radio_channels = {ng = 1, na = 124}
+			local ok, err = pcall(function()
+				inform._write_status({}, {last_ok = 1})
+				local f = io.open(inform.STATUS_FILE, "r")
+				local text = f:read("*a")
+				f:close()
+				assert_contains(text, "\nchannels=na:124,ng:1\n", "every band whose radio answered, sorted")
+				inform._radio_channels = {}
+				inform._write_status({}, {last_ok = 1})
+				f = io.open(inform.STATUS_FILE, "r")
+				text = f:read("*a")
+				f:close()
+				assert_true(not text:find("channels=", 1, true), "no radio answered: no line")
+			end)
+			os.remove(inform.STATUS_FILE)
+			inform.STATUS_FILE, inform._radio_channels = o_file, o_ch
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: the status file carries the clients per band, for the portal's public page",
 		fn = function()
 			local o_file, o_counts = inform.STATUS_FILE, inform._client_counts

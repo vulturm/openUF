@@ -993,6 +993,9 @@ function M.build_json(st, cfg, ufhw)
 		local noise_by_radio = {}
 		-- Live secondary-channel side per radio, for each vap's extchannel.
 		local extchan_by_radio = {}
+		-- The channel each band is on, for the status file's channels= line
+		-- (the portal's public page). Only bands whose radio answered.
+		local channel_by_band = {}
 		for _, radio in ipairs(radio_table) do
 			local ok_if, ifname = pcall(ufuci.get_ifname_for_radio, radio.name)
 			if ok_if and ifname then
@@ -1019,6 +1022,9 @@ function M.build_json(st, cfg, ufhw)
 					-- inject a ucihelper without band_for_channel.
 					if caps.channel and ufuci.band_for_channel then
 						radio.radio = ufuci.band_for_channel(caps.channel)
+					end
+					if caps.channel and radio.radio then
+						channel_by_band[radio.radio] = tonumber(caps.channel)
 					end
 					-- radio_caps: a genuine SEPARATE integer field on
 					-- radio_table (confirmed via decompile,
@@ -1373,6 +1379,7 @@ function M.build_json(st, cfg, ufhw)
 			radio.country      = nil  -- consumed into country_code above
 			radio.loadbalance_maxsta = nil
 		end
+		M._radio_channels = channel_by_band
 
 		-- Live connected-client counts, nested per-vap as sta_table -- matches
 		-- the real controller's vap-stats DTO, which nests connected clients
@@ -8526,6 +8533,16 @@ function M._write_status(st, fields)
 		local pairs_ = {}
 		for _, band in ipairs(bands) do pairs_[#pairs_ + 1] = band .. ":" .. M._client_counts[band] end
 		lines[#lines + 1] = "clients=" .. table.concat(pairs_, ",")
+	end
+	-- The channel each band is on now, band:channel (build_json): the public
+	-- page shows it from here, like the client count, with no iw per visitor.
+	if M._radio_channels and next(M._radio_channels) then
+		local bands = {}
+		for band in pairs(M._radio_channels) do bands[#bands + 1] = band end
+		table.sort(bands)
+		local pairs_ = {}
+		for _, band in ipairs(bands) do pairs_[#pairs_ + 1] = band .. ":" .. M._radio_channels[band] end
+		lines[#lines + 1] = "channels=" .. table.concat(pairs_, ",")
 	end
 	-- A radio whose driver applies another regulatory domain than UCI's
 	-- (_regd_tick), as radio:have!=want pairs.
