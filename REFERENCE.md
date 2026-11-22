@@ -121,6 +121,29 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | Speed test | Not applicable — gateway-only feature in current UniFi Network |
 | USG / USW emulation | Not implemented, not planned |
 
+### Local features (what openUF does on its own)
+
+Behaviour the controller does not push: openUF decides it on the AP. Each switch is an
+option in `openuf/conf.lua`, and most are on the device page's Settings too. ✅ means seen
+working on a MikroTik hAP ac beside genuine UniFi APs (U7-Lite, U7-IW).
+
+| Feature | Switch | Status |
+|---|---|---|
+| 802.11r key holders per SSID (`ftpeer.lua`) | with the rrb-unifi plugin | ✅ The plugin's `ft_peer` list is built from the sibling BSSes heard in scans, and each WLAN's `r0kh`/`r1kh` keep only the APs carrying that SSID: a guest PSK key is never pushed to an EAP BSS of another network. Kept in `/etc/openuf/ft-peers.json`, an entry not heard for 7 days ages out. A rewrite that only narrows the lists waits for the next push or 04:00, as it reloads hostapd |
+| UniFi's own element in the beacon | `unifi_sibling_ie` (on) | ✅ Genuine UniFi APs list this AP as one of theirs, in their neighbour tables and BTM candidate lists, instead of a rogue. Includes the AP-name element where the WLAN shows it |
+| Country IE with global operating classes | always | ✅ `ieee80211d=1`, `country3=0x04` on every radio, as UniFi firmware beacons. Without the element UniFi APs filed this AP as op class 0, with the US table's third octet as op 12; with `0x04` they name it op 81 and include it in their 802.11v candidates |
+| No hourly EAP re-authentication | always, on EAP WLANs | ✅ `eap_reauth_period=0`, the value UniFi firmware writes (hostapd's default is 3600: a full EAP-TLS exchange per client every hour) |
+| Move clients before a Wi-Fi restart (`handover.lua`) | `handover_before_reload` (on) | ✅ Before a push restarts a BSS, its 802.11v clients get a BSS Transition request toward the 802.11k neighbours and a few seconds to leave, while this AP still holds their 802.11r keys |
+| Steer a client off a weak signal (`clientmatch.lua`) | `client_steering` (off) | ⚠️ A client under -70 dBm for 20 s is asked for a beacon report; when it hears a neighbour 8 dB louder it gets a BSS Transition request naming it. Never a disconnect, never on a WLAN with the controller's Roaming Assistant |
+| 802.11k neighbour list, kept across restarts | `neighbour_list` (on) | ✅ Sibling BSSes from scans, stored over a daemon restart and rewritten as soon as a sweep ends. `openuf scan-now` (and the device page's Scan now) runs one sweep on the next heartbeat |
+| usteer only where wanted | `controller_steering` (on) | ✅ false stops usteer on this AP alone while the controller's Band Steering / Roaming Assistant stay on site-wide; openUF keeps the neighbour lists. usteer is restarted when it stops answering ubus |
+| Basic and minimum rates | always | ✅ Basic rates from the strictest WLAN on a radio, each WLAN's own floor as a TX rate mask, both kept inside the advertised set |
+| Transmit power modes | always | ✅ Auto is 85% of the band's maximum, Low/Medium/High fixed shares of it, Custom the controller's dBm. A regdomain other than the controller's country is logged; `country_override` applies at once |
+| Wireless child follows its parent's channel | always | ✅ The uplink radio moves to the parent's channel and a width that fits it |
+| Uplink radio kept for the uplink | `uplink_radio_aps` (on: SSIDs stay) | ✅ false disables that radio's SSIDs while the uplink is wireless, and restores them when a cable takes over. The controller greys this switch out on a meshed AP |
+| Clients on the parent the controller names | always, when Uplink is set by hand | ⚠️ A station on another parent is asked to ROAM to the chosen one's downlink when a fresh scan hears it at -75 dBm or better; at most once per 10 min, no wifi reload, any parent again if that one goes |
+| Child stalled on a DFS parent channel | `dfs_cac_recover` (off) | ⚠️ Always reported (log, `ap_stall=` in `/tmp/openuf-status`); on, hostapd is restarted in place to run the radar check, the uplink up throughout, retried with a backoff |
+
 ## Supported hardware
 
 A dual-band OpenWrt device with **at least 16 MB flash**, and roughly **5 MB free on
