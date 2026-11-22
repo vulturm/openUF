@@ -469,51 +469,51 @@
 		if (r) {
 			const keeper = r.usteer ? 'usteer' : listOn ? 'openUF' : 'Nobody';
 			const what = r.usteer
-				? 'Names only access points that run usteer. Genuine UniFi access points are left out.'
-				: listOn ? 'Names the site\'s other access points on the same network, openUF and UniFi alike, and this one\'s other band.'
-					: 'Each network names only this access point\'s own other band, if anything.';
+				? 'Lists only access points running usteer. UniFi access points are left out.'
+				: listOn ? 'Lists the other access points on this network, UniFi included, and this one\'s other band.'
+					: 'Lists only this access point\'s other band.';
 			rows.push(row('Neighbour lists kept by', what, h('span', { class: 'value' }, keeper), { inline: true }));
 			const w = r.steering || {};
 			// A function: a DOM node can sit in one notice only.
 			const items = () => {
 				const out = [];
 				for (const n of w.band_wlans || []) out.push(h('li', {}, 'Band Steering on the network ', h('strong', {}, n)));
-				if (w.band_device) out.push(h('li', {}, 'Band Steering in this access point\'s own device settings (Prefer 5 GHz)'));
+				if (w.band_device) out.push(h('li', {}, 'Band Steering (Prefer 5 GHz) in this device\'s settings'));
 				for (const n of w.roam_wlans || []) out.push(h('li', {}, 'Roaming Assistant on the network ', h('strong', {}, n)));
 				return out;
 			};
 			const asked = items().length > 0;
 			if (r.usteer)
 				rows.push(h('div', { class: 'notice warn' }, h('span', { html: ICON.info }), h('div', {},
-					h('strong', {}, 'usteer carries out, because “Use usteer” is on:'),
+					h('strong', {}, 'Handled by usteer:'),
 					asked ? h('ul', { class: 'todo' }, items())
 						: h('p', { class: 'todo' }, 'Band Steering or Roaming Assistant.'),
-					h('p', { class: 'todo' }, 'Turn off “Use usteer” below and openUF carries these out itself, keeping the UniFi access points in the neighbour lists.'))));
+					h('p', { class: 'todo' }, 'Turn off “Use usteer” to let openUF handle these and keep UniFi access points in the neighbour lists.'))));
 			else if (asked && value('controller_steering', '1') === '1')
 				rows.push(h('div', { class: 'notice' }, h('span', { html: ICON.info }), h('div', {},
-					h('strong', {}, 'openUF carries out, from the controller:'), h('ul', { class: 'todo' }, items()),
-					h('p', { class: 'todo' }, 'Clients that support 802.11k and 802.11v are asked to move. Nobody is disconnected.'))));
+					h('strong', {}, 'Handled by openUF, as set in the controller:'), h('ul', { class: 'todo' }, items()),
+					h('p', { class: 'todo' }, 'Clients that support it are asked to move. Nobody is disconnected.'))));
 			// This AP alone; the controller keeps both on for the others
 			// (inform._local_steering_gate). A push applies it: the daemon asks
 			// for one when the option changes.
 			rows.push(row('Follow the controller\'s steering',
-				'Carry out Band Steering and Roaming Assistant when the controller turns them on. Off, this access point ignores both; other access points go on steering, and the controller still shows both as on here. 802.11k, 802.11v and fast roaming stay on. Takes effect within a minute.',
+				'Apply Band Steering and Roaming Assistant from the controller. When off, this access point ignores them, though the controller still shows them as on. Fast roaming keeps working.',
 				toggle('controller_steering', '1', ro), { inline: true }));
-			rows.push(row('Use usteer', 'Carry them out with usteer instead of openUF. For a site with only OpenWrt access points, or with clients without 802.11k. usteer does not know genuine UniFi access points and removes them from the neighbour lists.',
+			rows.push(row('Use usteer', 'Let usteer handle steering instead of openUF. Only for sites with OpenWrt access points alone: usteer removes UniFi access points from the neighbour lists.',
 				toggle('use_usteer', '0', ro || value('controller_steering', '1') !== '1'), { inline: true }));
 			// roamassist.lua reads it each time it judges a client; usteer's
 			// own thresholds are untouched. Only while this AP follows the
 			// controller's Roaming Assistant.
 			const following = value('controller_steering', '1') === '1';
 			const dbSteps = steps('roam_assist_diff_db', '8', ['4', '6', '8', '10', '12'].map(v => ({ value: v, label: v + ' dB' })), v => v + ' dB');
-			rows.push(row('Roaming Assistant: move only to a louder access point', following
-				? 'How much better, in dB, another access point must hear a weak client before it is moved there. Lower moves clients sooner; higher keeps them put unless the other access point is clearly better. The weak-signal threshold itself is the controller\'s.'
-				: 'Not used while this access point ignores the controller\'s steering.',
+			rows.push(row('Roaming Assistant: signal margin', following
+				? 'How much stronger another access point must be before a weak client is moved to it. The weak-signal threshold is set in the controller.'
+				: 'Not used while the controller\'s steering is ignored.',
 				select('roam_assist_diff_db', '8', dbSteps, ro || !following)));
 			if (value('controller_steering', '1') === '0' && asked)
 				rows.push(h('div', { class: 'notice' }, h('span', { html: ICON.info }), h('div', {},
 					h('strong', {}, 'Ignored on this access point:'), h('ul', { class: 'todo' }, items()),
-					h('p', { class: 'todo' }, 'Clients are not moved to 5 GHz or away from a weak access point here; they roam by themselves.'))));
+					h('p', { class: 'todo' }, 'Clients on this access point roam on their own.'))));
 		}
 		// While usteer runs it rewrites every list each second and openUF's is
 		// not used (inform._nrlist_tick yields): the switch is shown greyed out
@@ -521,8 +521,8 @@
 		// is back in force the moment usteer stops.
 		const usteerOwns = !!(r && r.usteer);
 		rows.push(row('openUF\'s neighbour list', usteerOwns
-			? 'Inactive while usteer keeps the lists. Turn off “Use usteer” above to use it.'
-			: 'Answer 802.11k requests with the site\'s other access points, so clients roam to the right one.',
+			? 'Not used while usteer keeps the lists. Turn off “Use usteer” to use it.'
+			: 'Tell clients about the other access points, so they roam to the right one.',
 			toggle('neighbour_list', '1', ro || usteerOwns), { inline: true }));
 		for (const b of (r && r.bss) || []) {
 			const parts = [];
@@ -535,7 +535,7 @@
 			// hostapd's counters, reset with the BSS: "sent" is neighbor_report_tx
 			// (a client asked for the list), "moved" bss_transition_request_tx.
 			const line = row(b.ssid || b.ifname, [BAND(b.freq), b.channel ? 'channel ' + b.channel : null, b.ifname].filter(Boolean).join(' · '),
-				h('span', { class: 'value', title: 'How many times a client asked this network for its neighbour list, since Wi-Fi last restarted. Clients usually ask when their signal drops and they look for a better access point.' }, parts.join(' · ')), { inline: true });
+				h('span', { class: 'value', title: 'How many times clients asked for this list since Wi-Fi last restarted. They usually ask when their signal drops.' }, parts.join(' · ')), { inline: true });
 			// What a client asking this BSS is told, entry by entry: the quickest
 			// way to see a missing access point, without SSH.
 			if (b.list && b.list.length)
@@ -547,13 +547,13 @@
 		// clientmatch.lua: read every heartbeat. It needs the clients' beacon
 		// reports, which "Ask clients to scan" also collects; the collection
 		// runs for it on its own.
-		rows.push(row('Steer clients on every network', 'What Band Steering and Roaming Assistant turn on for their networks, on all of them: a client on a weak signal, or on 2.4 GHz with a good 5 GHz in reach, is asked which access points it hears and then asked to move. A request, never a disconnect. Only clients that support it.',
+		rows.push(row('Steer clients on every network', 'Apply Band Steering and Roaming Assistant to all networks, whatever the controller says. Clients are asked to move, never disconnected.',
 			toggle('client_steering', '0', ro), { inline: true }));
 		// handover.lua: read at each push, so it applies to the next reload.
-		rows.push(row('Move clients before a Wi-Fi restart', 'When a change from the controller restarts a network here, first ask its clients to roam to a neighbouring access point. They leave while this one still holds their fast-roaming keys, so the move is quick instead of a full reconnect. Clients that ignore the request are dropped by the restart, as before.',
+		rows.push(row('Move clients before a Wi-Fi restart', 'Before a controller change restarts a network, ask its clients to roam to a nearby access point so the move is quick. Clients that ignore this reconnect after the restart.',
 			toggle('handover_before_reload', '1', ro), { inline: true }));
 		if (r)
-			rows.push(row('Fast roaming with UniFi access points', 'The 802.11r translator (rrb-unifi) that lets clients hand over between this access point and genuine UniFi ones without a full reconnect.',
+			rows.push(row('Fast roaming with UniFi access points', 'Lets clients move between this access point and UniFi ones without a full reconnect (rrb-unifi).',
 				h('span', { class: 'value' }, r.rrb_unifi ? 'Installed' : 'Not installed'), { inline: true }));
 		return h('div', { class: 'group card' }, h('div', { class: 'group-title' }, 'Roaming'), ...rows);
 	}
@@ -571,10 +571,10 @@
 
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Controller'),
-			ro ? h('div', { class: 'notice warn', html: ICON.info + '<span>openUF was installed without its package here, so its settings live in <code>conf.lua</code> on the device. They are shown, not editable.</span>' }) : null,
+			ro ? h('div', { class: 'notice warn', html: ICON.info + '<span>Installed without the package: settings are in <code>conf.lua</code> on the device and are read-only here.</span>' }) : null,
 			row('Inform URL', adopted
-				? 'The controller has set this. It changes it itself when needed.'
-				: 'Where this access point looks for a UniFi controller until one adopts it.',
+				? 'Set by the controller.'
+				: 'Where to look for a UniFi controller until one adopts this access point.',
 				text('inform_url', (st.config && st.config.inform_url) || 'http://unifi:8080/inform', { placeholder: 'http://192.0.2.1:8080/inform', 'aria-label': 'Inform URL', disabled: ro }, informValid),
 				{ stack: true }),
 			row('Adoption', adopted ? 'Adopted' + (state.inform_url ? ' by ' + state.inform_url.replace(/^https?:\/\//, '').replace(/[:/].*$/, '') : '') : 'Not adopted yet',
@@ -583,19 +583,19 @@
 					onclick: () => dialog({
 						icon: ICON.info,
 						title: 'Forget the controller?',
-						body: ['This access point will drop its adoption and the configuration the controller pushed, and wait to be adopted again.', 'The controller will show it as offline until you forget it there too.'],
+						body: ['Removes the adoption and the controller\'s configuration, then waits to be adopted again.', 'It stays offline in the controller until you forget it there too.'],
 						actions: [{ label: 'Cancel' }, { label: 'Forget controller', class: 'danger solid', run: () => exec('/usr/bin/openuf', ['reset-inform'], 'Adoption reset.') }]
 					})
 				}, 'Forget controller')),
-			row('Undo a push that takes the access point offline', 'If, four minutes after the controller changes the configuration, a radio has not come back or the controller cannot be reached, the previous configuration is restored. It also undoes a change meant to move the device where the controller cannot follow at once, such as a new management VLAN.', toggle('apply_rollback', '0', ro), { inline: true }),
-			row('Create the controller\'s device login', 'Add the SSH account set under Device Authentication in the controller, with the password it sends. The account has full root rights.', toggle('device_login', '0', ro), { inline: true })
+			row('Undo a push that takes the access point offline', 'If a radio or the controller connection is still down four minutes after a change, the previous configuration is restored. This can also undo a deliberate move, such as a new management VLAN.', toggle('apply_rollback', '0', ro), { inline: true }),
+			row('Create the controller\'s device login', 'Adds the SSH account from Device Authentication in the controller. It has full root access.', toggle('device_login', '0', ro), { inline: true })
 		));
 
 		const idLocked = adopted;
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Device'),
-			idLocked ? h('div', { class: 'notice', html: ICON.info + '<span>The hardware profile and UniFi identity are locked while the device is adopted: the controller knows it by them. Forget the controller first to change them.</span>' }) : null,
-			row('Hardware profile', 'How openUF reads this board: its ports, radios and status light.',
+			idLocked ? h('div', { class: 'notice', html: ICON.info + '<span>The hardware profile and UniFi identity are locked while adopted. Forget the controller to change them.</span>' }) : null,
+			row('Hardware profile', 'How openUF maps this board\'s ports, radios and status light.',
 				select('modelmap', ro ? ((st.modelmap && st.modelmap.name) || 'auto') : 'auto', presetChoices(presets.modelmaps, 'Automatic' + (presets.auto ? ' (' + presets.auto + ')' : '')), idLocked || ro)),
 			row('Presented as', 'The UniFi device model the controller sees.',
 				select('ufmodel', ro ? ((st.identity && st.identity.name) || 'auto') : 'auto', presetChoices(presets.ufmodels, 'Automatic (profile default)'), idLocked || ro))
@@ -603,11 +603,11 @@
 
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Wireless'),
-			row('Only broadcast UniFi networks', 'Turn off wireless networks set up on this device by hand, so only the controller\'s networks are on the air.', toggle('use_only_unifi_wlan', '1', ro), { inline: true }),
-			row('Announce on the local network', 'Let UniFi Network discover this access point without typing its address.', toggle('l2_announce', '1', ro), { inline: true }),
+			row('Only broadcast UniFi networks', 'Turn off Wi-Fi networks created by hand on this device.', toggle('use_only_unifi_wlan', '1', ro), { inline: true }),
+			row('Announce on the local network', 'Let UniFi Network find this access point automatically.', toggle('l2_announce', '1', ro), { inline: true }),
 			// Defaults are uciconf.lua's (and conf.lua's): an option the
 			// section does not hold must show what the daemon actually does.
-			row('Recognised by UniFi access points', 'Beacon the element genuine UniFi access points look for, so they do not report this one\'s networks as a rogue impersonating the site.', toggle('unifi_sibling_ie', '1', ro), { inline: true })
+			row('Recognised by UniFi access points', 'Stops UniFi access points from reporting this one\'s networks as rogue.', toggle('unifi_sibling_ie', '1', ro), { inline: true })
 		));
 
 		groups.push(roamingGroup(ro));
@@ -617,19 +617,19 @@
 			{ value: '900', label: 'Every 15 minutes' }, { value: '3600', label: 'Every hour' }], v => 'Every ' + v + ' s');
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Radio environment'),
-			row('Ask clients to scan', 'Have one capable client at a time report the networks it hears. The access point never leaves its channel; the client does, for about a second.', toggle('rrm_enrichment', '1', ro), { inline: true }),
+			row('Ask clients to scan', 'Ask one client at a time which networks it hears. The client leaves its channel for about a second; the access point does not.', toggle('rrm_enrichment', '1', ro), { inline: true }),
 			// Across all radios and clients together (conf.lua). Each answer
 			// also writes a burst of BEACON-RESP lines to the system log.
 			row('How often to ask', value('rrm_enrichment', '1') === '1'
-				? 'One client is asked per interval, across all radios. Shorter keeps the Environment view fresher, and fills the system log faster.'
+				? 'One client per interval. Shorter keeps the Environment view fresher but fills the system log faster.'
 				: 'Not used while client scans are off.',
 				select('rrm_request_interval', '600', steps('rrm_request_interval', '600', [
 					{ value: '300', label: 'Every 5 minutes' }, { value: '600', label: 'Every 10 minutes' },
 					{ value: '1800', label: 'Every 30 minutes' }, { value: '3600', label: 'Every hour' }],
 					v => 'Every ' + v + ' s'), ro || value('rrm_enrichment', '1') !== '1')),
-			row('Scan for neighbouring networks', 'The access point scans a few channels at a time, under half a second off the air each, so the controller\'s Environment view and the neighbour lists see other channels. On a wireless (mesh) uplink the radio carrying it is never scanned, so the uplink is not interrupted.',
+			row('Scan for neighbouring networks', 'Scan a few channels at a time, under half a second each, to keep the Environment view and neighbour lists current. A radio carrying a wireless uplink is never scanned.',
 				select('neighbour_scan_interval', '0', scanSteps, ro)),
-			row('Scan now', 'One scan right away, the same as above. The neighbour lists are rewritten when it ends, in about a minute.',
+			row('Scan now', 'Run one scan now. Neighbour lists update in about a minute.',
 				h('button', { class: 'btn', onclick: async () => {
 					await exec('/usr/bin/openuf', ['scan-now'], 'Scan started. The neighbour lists update in about a minute.');
 					// Long enough for a 2.4 GHz sweep (13 channels, four per
@@ -642,18 +642,18 @@
 
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Wireless uplink (mesh)'),
-			row('Serve clients on the uplink radio', 'When off, a wirelessly meshed access point keeps its uplink radio for the uplink alone; its networks stay on the other radios and come back when a cable takes over. The controller cannot set this.', toggle('uplink_radio_aps', '1', ro), { inline: true }),
-			row('Preferred parent', 'The MAC address of the access point the wireless uplink should use, as the controller lists it. The uplink moves to it whenever it hears it well enough and uses any other while it does not. The controller\'s own Uplink setting offers only wired access points; this one also takes a parent that is itself meshed. Empty: none.',
+			row('Serve clients on the uplink radio', 'When off, the radio carrying a wireless uplink serves no clients. Its networks return when a cable is connected.', toggle('uplink_radio_aps', '1', ro), { inline: true }),
+			row('Preferred parent', 'MAC address of the access point to use as wireless uplink. If it is out of range, another one is used. Unlike the controller\'s setting, this can name a meshed access point. Leave empty for none.',
 				text('preferred_parent', '', { placeholder: 'aa:bb:cc:dd:ee:ff', disabled: !!ro },
 					v => v === '' || /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/.test(v))),
-			row('Move to the best parent', 'With no parent named, the uplink moves to the best access point it hears: each wireless hop further from the wire counts as 3 dB of signal, and it moves when another is 5 dB better on that score, never to one more than a hop further out. Off: it stays on the parent it joined first.', toggle('mesh_parent_auto', '1', ro), { inline: true }),
-			row('Recover networks after a DFS move', 'When the parent moves to a radar (DFS) channel this radio has not checked, its networks stay off the air. On, the access points are restarted to run the radar check, with the uplink kept up; they return a minute later (ten on channels 120–128). Experimental.', toggle('dfs_cac_recover', '0', ro), { inline: true })
+			row('Move to the best parent', 'With no preferred parent, connect to the best access point in range. Each extra hop counts as 3 dB; it moves only for a 5 dB gain and at most one hop further out. When off, it stays on its first parent.', toggle('mesh_parent_auto', '1', ro), { inline: true }),
+			row('Recover networks after a DFS move', 'If the parent moves to an unchecked radar (DFS) channel, restart this access point\'s networks to run the check, keeping the uplink up. They return in about a minute, or ten on channels 120–128. Experimental.', toggle('dfs_cac_recover', '0', ro), { inline: true })
 		));
 
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'This page'),
-			row('Show this page instead of LuCI', 'When off, the device\'s address opens OpenWrt\'s LuCI interface as before.', toggle('portal', '1'), { inline: true }),
-			row('Show the client count without signing in', 'How many clients are connected on each band, on the page anyone on the network can open. Counts only, never names or addresses.', toggle('public_clients', '1'), { inline: true })
+			row('Show this page instead of LuCI', 'When off, the device\'s address opens LuCI.', toggle('portal', '1'), { inline: true }),
+			row('Show the client count without signing in', 'Show clients per band on the public page. Counts only, never names or addresses.', toggle('public_clients', '1'), { inline: true })
 		));
 
 		groups.push(h('div', { class: 'group card' },
@@ -711,8 +711,8 @@
 			icon: ICON.terminal,
 			title: 'Open LuCI?',
 			body: [
-				'LuCI is OpenWrt\'s full configuration interface. This device is managed by your UniFi controller, which may overwrite changes made there.',
-				'You will need the device\'s root password. Use “Exit LuCI mode” at the top of LuCI to come back.'
+				'LuCI is OpenWrt\'s full configuration interface. Your UniFi controller may overwrite changes made there.',
+				'You will need the root password. Use “Exit LuCI mode” in LuCI to come back.'
 			],
 			actions: [{ label: 'Stay here' }, { label: 'Open LuCI', class: 'primary', run: () => { window.location.href = '/cgi-bin/luci/__openuf/unlock'; } }]
 		});
