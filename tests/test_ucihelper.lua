@@ -2632,8 +2632,9 @@ return {
 				assert_eq(s.radius_acct_interim_interval, "600", "interim interval")
 				assert_eq(s.nas_identifier, "ap-office", "NAS id")
 				assert_eq(s.dynamic_vlan, "2", "dynamic VLAN")
+				assert_eq(s.eap_reauth_period, "0", "no hourly EAP reauth, as UniFi firmware")
 				-- Nothing invented: the wire carries none of these.
-				for _, k in ipairs({"ownip", "dynamic_own_ip_addr", "eap_reauth_period",
+				for _, k in ipairs({"ownip", "dynamic_own_ip_addr",
 						"radius_request_cui", "radius_das_client", "radius_das_port",
 						"eap_server", "ieee8021x", "wpa_key_mgmt"}) do
 					assert_nil(s[k], k .. " is not written")

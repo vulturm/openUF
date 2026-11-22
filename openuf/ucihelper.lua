@@ -2618,10 +2618,11 @@ function M.apply_config(resp, cfg, opts)
 			-- silently authenticated against the wrong secret.
 			--
 			-- Nothing here is invented: no ownip/dynamic_own_ip_addr,
-			-- eap_reauth_period, radius_request_cui, eap_server, ieee8021x or
-			-- wpa_key_mgmt. The wire carries none of them, and a consumer keyed
-			-- on a producer that does not exist is this codebase's recurring
-			-- defect. (radius_das_* IS on the wire -- see below.)
+			-- radius_request_cui, eap_server, ieee8021x or wpa_key_mgmt. The
+			-- wire carries none of them, and a consumer keyed on a producer
+			-- that does not exist is this codebase's recurring defect.
+			-- (radius_das_* IS on the wire -- see below. eap_reauth_period is
+			-- not, but UniFi firmware writes a fixed 0 -- see below.)
 			--
 			-- The AUTHENTICATION servers reach hostapd one of two ways. ap.uc
 			-- calls iface_authentication_server() only from its EAP branch (and
@@ -2631,6 +2632,14 @@ function M.apply_config(resp, cfg, opts)
 			-- iface_accounting_server() IS called unconditionally, so the
 			-- accounting servers always go through UCI.
 			local eap_bss = EAP_ENC[SECURITY_MAP[vap.security] or ""] or false
+			if eap_bss then
+				-- hostapd's default is 3600: every EAP client redid a full
+				-- EAP-TLS exchange with the RADIUS server each hour. UniFi
+				-- firmware writes eap_reauth_period=0 into every EAP BSS (read
+				-- off a U7-Lite's and a U7-IW's /etc/hostapd/*.cfg); the key
+				-- stays valid until the client leaves.
+				extra.eap_reauth_period = "0"
+			end
 			if vap.radius then
 				local function servers(list, kind, addr_opt, port_opt, secret_opt, raw)
 					local first = list and list[1]
