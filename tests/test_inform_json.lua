@@ -1029,12 +1029,12 @@ return {
 				- 4 * 100 / (st.wifi_tx_attempts + st.wifi_tx_dropped)) < 1e-10,
 				"wifi_tx_retries_percentage = retries / (attempts + dropped)")
 			-- satisfaction (satisfaction.lua): signal avg -63 dBm is far
-			-- above the noise floor (100), the mean of 144.4 and 72.2
-			-- Mbit/s is 108300 kbps (90), and the retry window has no
-			-- minute yet (100).
-			assert_eq(sta_table[1].satisfaction, 90, "the phy rate binds")
-			assert_eq(sta_table[1].satisfaction_now, 90, "satisfaction_now matches satisfaction")
-			assert_eq(sta_table[1].satisfaction_reason, 2, "reason: phy_rate")
+			-- above the noise floor (100), the rate is not judged on the
+			-- survey's 2437 MHz (U7 firmware has no phy term on 2.4 GHz),
+			-- and the retry window has no minute yet (100).
+			assert_eq(sta_table[1].satisfaction, 100, "nothing binds")
+			assert_eq(sta_table[1].satisfaction_now, 100, "satisfaction_now matches satisfaction")
+			assert_eq(sta_table[1].satisfaction_reason, 0, "no reason")
 			assert_eq(sta_table[1].anomalies, 0, "no anomalies")
 		end
 	},
@@ -3077,8 +3077,12 @@ return {
 			local reasons, anomalies = 0, 0
 			for _, v in pairs(vap.reasons_bar_chart) do reasons = reasons + v end
 			for _, v in pairs(vap.anomalies_bar_chart) do anomalies = anomalies + v end
-			assert_eq(reasons, 2, "each client limited by one term is counted once")
-			assert_eq(vap.reasons_bar_chart.phy_rate, 2, "both by their phy rate")
+			local limited = 0
+			for _, st in ipairs(vap.sta_table) do
+				if st.satisfaction_reason ~= 0 then limited = limited + 1 end
+			end
+			assert_eq(reasons, limited, "each client limited by one term is counted once")
+			assert_eq(vap.reasons_bar_chart.phy_rate, 0, "none by its phy rate on 2.4 GHz")
 			assert_eq(anomalies, 0, "no anomalies on these clients")
 			assert_eq(vap.anomalies_bar_chart.weak_signal, 0, "every anomaly key is sent")
 		end
@@ -3490,10 +3494,10 @@ return {
 			assert_eq(score, 0, "SNR 4: no signal")
 			assert_eq(anomalies, 1, "weak_signal")
 
-			-- PHY: the mean of the two rates, in absolute steps.
+			-- PHY: the mean of the two rates on U7's line, here on 5180 MHz.
 			inform._sta_stats_cache = {}
 			score, reason = inform_once(client{tx = "65.0 MBit/s MCS 7", rx = "72.2 MBit/s MCS 7 short GI"})
-			assert_eq(score, 85, "a 2.4 GHz single-stream client at its top rate")
+			assert_eq(score, 96, "68.6 Mbit/s: 95 + 5 * 43.6/125")
 			assert_eq(reason, 2, "reason: phy_rate")
 
 			inform._time = orig_time

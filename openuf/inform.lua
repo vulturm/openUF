@@ -1023,6 +1023,7 @@ function M.build_json(st, cfg, ufhw)
 		local maxsta_by_radio = {}
 		-- Live noise floor per radio, for satisfaction.
 		local noise_by_radio = {}
+		local freq_by_radio = {}
 		-- Live secondary-channel side per radio, for each vap's extchannel.
 		local extchan_by_radio = {}
 		-- The channel each band is on, for the status file's channels= line
@@ -1170,6 +1171,9 @@ function M.build_json(st, cfg, ufhw)
 				local ok_rs, stats = pcall(M._sysinfo.radio_stats, ifname)
 				local in_use = ok_rs and _in_use_survey(stats) or nil
 				noise_by_radio[radio.name] = in_use and in_use.noise
+				-- The live channel's MHz, for the WiFi Experience phy term (no
+				-- term on 2.4 GHz, see satisfaction.phy_score).
+				freq_by_radio[radio.name] = in_use and in_use.freq
 				-- min_rssi (outbound, dBm): the stored raw wire value less the
 				-- controller's fixed +95 encoding (openuf/minrssi.lua). Not the
 				-- live noise floor: the controller has none to encode with, and
@@ -1728,6 +1732,7 @@ function M.build_json(st, cfg, ufhw)
 					snr = sat.snr(sta.signal_avg or sta.signal, noise),
 					tx_kbps = sta.tx_bitrate and math.floor(sta.tx_bitrate * 1000 + 0.5),
 					rx_kbps = sta.rx_bitrate and math.floor(sta.rx_bitrate * 1000 + 0.5),
+					freq = freq_by_radio[vap.radio_name],
 					tries = mov.tries, retries = mov.retries, dropped = mov.dropped,
 				}
 				if satisfaction_now then

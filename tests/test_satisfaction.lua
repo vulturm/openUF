@@ -34,31 +34,31 @@ return {
 		end
 	},
 	{
-		name = "satisfaction: phy term is the mean rate in absolute steps",
+		-- U7 firmware (libubnt BZ2.8.8.14 calc_sta_satisfaction): no phy term
+		-- under 4800 MHz, straight lines between table points above.
+		name = "satisfaction: phy term is U7's: none on 2.4 GHz, lines on 5 GHz",
 		fn = function()
-			local function p(tx, rx) return (sat.phy_score(tx, rx)) end
-			assert_eq(p(0, 0), 100, "no rate known: not judged")
-			assert_eq(p(nil, nil), 100, "nil rates: not judged")
-			assert_eq(p(6000, 0), 10, "6000 kbps (only tx known)")
-			assert_eq(p(0, 6001), 25, "6001 kbps (only rx known)")
-			assert_eq(p(12000, 12000), 25, "12000")
-			assert_eq(p(12002, 12002), 50, "12002 (the halves sum to 12002)")
-			assert_eq(p(18000, 18000), 50, "18000")
-			assert_eq(p(24000, 24000), 70, "24000")
-			assert_eq(p(24001, 24003), 75, "24000 + 1: floor(24001/2) + floor(24003/2) = 24001")
-			assert_eq(p(36000, 36000), 75, "36000")
-			assert_eq(p(54000, 54000), 80, "54000")
-			assert_eq(p(72200, 72200), 85, "HT MCS 7 both ways")
-			assert_eq(p(100000, 100000), 85, "100000")
-			assert_eq(p(200000, 200000), 90, "200000")
-			assert_eq(p(400000, 400000), 95, "400000")
-			assert_eq(p(400001, 400001), 95, "the halves of two odd rates lose a kbps each: 400000")
-			assert_eq(p(400002, 400002), 100, "400001")
-			assert_eq(p(866700, 6000), 100, "VHT tx and a 6 Mbit/s legacy rx frame: 433350 + 3000")
-			local _, low = sat.phy_score(12000, 12000)
+			local function p(tx, rx, f) return (sat.phy_score(tx, rx, f)) end
+			assert_eq(p(6000, 6000, 2437), 100, "2.4 GHz: not judged, at any rate")
+			assert_eq(p(144400, 130000, 2462), 100, "xan-bc's S10 on ch 11: 100, not 4.0.15's 90")
+			assert_eq(p(6000, 6000, nil), 100, "band unknown: not judged")
+			assert_eq(p(0, 0, 5180), 100, "no rate known: not judged")
+			assert_eq(p(150000, 150000, 5180), 100, "150 Mbit/s: the top")
+			assert_eq(p(87500, 87500, 5180), 97, "half way 25-150: 97.5 toward zero")
+			assert_eq(p(25000, 25000, 5180), 95, "25 Mbit/s: the top row's low end")
+			assert_eq(p(20000, 20000, 5180), 92, "half way 15-25: 92.5")
+			assert_eq(p(10000, 10000, 5180), 80, "10 Mbit/s")
+			assert_eq(p(5500, 5500, 5180), 70, "half way 1-10")
+			assert_eq(p(999, 999, 5180), 0, "under 1 Mbit/s: 0")
+			assert_eq(p(866700, 6000, 5180), 100, "the mean of tx and rx, as before")
+			assert_eq(p(0, 30000, 4940), 100, "4.9 GHz tops out at 30 Mbit/s")
+			assert_eq(p(0, 27500, 4940), 97, "between 25 and 30 there")
+			local _, low = sat.phy_score(12000, 12000, 5180)
 			assert_true(low, "12000 is a low_phy_rate anomaly")
-			_, low = sat.phy_score(12002, 12002)
+			_, low = sat.phy_score(12002, 12002, 5180)
 			assert_false(low, "12001 is not")
+			_, low = sat.phy_score(1000, 1000, 2412)
+			assert_false(low, "nor anything on 2.4 GHz")
 		end
 	},
 	{
@@ -97,19 +97,19 @@ return {
 			assert_eq(reason, sat.SIGNAL, "reason: signal")
 			assert_eq(anomalies, 0, "95 is no anomaly")
 
-			s, reason, anomalies = sat.score{snr = 20, tx_kbps = 72200, rx_kbps = 72200}
-			assert_eq(s, 85, "phy 85 < signal 95")
+			s, reason, anomalies = sat.score{snr = 20, tx_kbps = 20000, rx_kbps = 20000, freq = 5180}
+			assert_eq(s, 92, "phy 92 < signal 95")
 			assert_eq(reason, sat.PHY_RATE, "reason: phy_rate")
 
-			s, reason = sat.score{snr = 10, tx_kbps = 72200, rx_kbps = 72200}
-			assert_eq(s, 65, "signal 65 < phy 85")
+			s, reason = sat.score{snr = 10, tx_kbps = 20000, rx_kbps = 20000, freq = 5180}
+			assert_eq(s, 65, "signal 65 < phy 92")
 			assert_eq(reason, sat.SIGNAL, "reason: signal")
 
-			s, reason = sat.score{snr = 14, tx_kbps = 72200, rx_kbps = 72200}
-			assert_eq(s, 85, "a tie: signal 85 = phy 85")
+			s, reason = sat.score{snr = 17, tx_kbps = 20000, rx_kbps = 20000, freq = 5180}
+			assert_eq(s, 92, "a tie: signal 92 = phy 92")
 			assert_eq(reason, sat.SIGNAL, "the earlier term keeps the reason on a tie")
 
-			s, reason, anomalies = sat.score{snr = 6, tx_kbps = 6000, rx_kbps = 6000,
+			s, reason, anomalies = sat.score{snr = 6, tx_kbps = 6000, rx_kbps = 6000, freq = 5180,
 				tries = 100, retries = 100}
 			assert_eq(s, 0, "retries 100 % -> 0")
 			assert_eq(reason, sat.WIFI_RETRIES, "reason: wifi_retries")

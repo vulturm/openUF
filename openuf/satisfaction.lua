@@ -10,7 +10,8 @@
 	A client's score is the lowest of six terms, each 0-100:
 	  signal   SNR in dB (the firmware's "rssi"): <5 -> 0, 5-14 -> 5*snr + 15,
 	           >=15 -> snr + 75, capped at 100
-	  phy_rate the mean of the last tx and rx rates, in steps (phy_score)
+	  phy_rate the mean of the last tx and rx rates (phy_score: the U7
+	           firmware's lines, 4.0.15's were absolute steps)
 	  tcp_packet_loss, tcp_latency
 	           from the driver's TCP inspection (ubnt_calc_tcp_stats in
 	           umac.ko); mac80211 has no equivalent, so they score 100, which
@@ -70,25 +71,47 @@ function M.signal_score(snr)
 	return 5 * snr + 15
 end
 
--- Upper bounds (kbps, inclusive) and the score of each step above the last.
-local PHY_STEPS = {
-	{6000, 10}, {12000, 25}, {18000, 50}, {24000, 70}, {36000, 75},
-	{54000, 80}, {100000, 85}, {200000, 90}, {400000, 95},
+-- The phy term as U7 firmware computes it (libubnt BZ2.8.8.14,
+-- calc_sta_satisfaction, read off xan-sufra): no term below 4800 MHz, so a
+-- 2.4 GHz client scores 100 on its rate whatever it is; above, a straight
+-- line between the points of one of two tables, {score at low, score at
+-- high, low kbps, high kbps}, top row first, 0 under the last. 4.0.15's
+-- absolute steps (100 only past 400 Mbit/s, 90 under 200, on every band)
+-- had every 2.4 GHz client of an openUF AP at 85-90 for its rate while the
+-- U7s beside it scored theirs 100 at 6 Mbit/s.
+local PHY_LINES_5G = {      -- above 5000 MHz; 100 from 150000 kbps
+	{95, 100, 25000, 150000}, {90, 95, 15000, 25000},
+	{80, 90, 10000, 15000}, {60, 80, 1000, 10000},
+}
+local PHY_LINES_49G = {     -- 4800-5000 MHz; 100 from 30000 kbps
+	{95, 100, 25000, 30000}, {90, 95, 15000, 25000},
+	{80, 90, 10000, 15000}, {60, 80, 1000, 10000},
 }
 
--- tx_kbps/rx_kbps: the last rates in kbps (0 or nil when unknown). Returns
--- the score and whether it is a low_phy_rate anomaly.
-function M.phy_score(tx_kbps, rx_kbps)
+-- tx_kbps/rx_kbps: the last rates in kbps (0 or nil when unknown); freq: the
+-- BSS's MHz (nil: not judged). The rate judged is their mean, as 4.0.15
+-- took it: U7 firmware scales one of its own counters there, which mac80211
+-- has no copy of. Returns the score and whether it is a low_phy_rate anomaly
+-- (12 Mbit/s or less, 4.0.15's line; the U7 sets that bit elsewhere).
+function M.phy_score(tx_kbps, rx_kbps, freq)
+	if not freq or freq < 4800 then return 100, false end
 	local tx, rx = tx_kbps or 0, rx_kbps or 0
 	local r
 	if tx == 0 and rx == 0 then return 100, false
 	elseif tx == 0 then r = rx
 	elseif rx == 0 then r = tx
 	else r = math.floor(tx / 2) + math.floor(rx / 2) end
-	for i, step in ipairs(PHY_STEPS) do
-		if r <= step[1] then return step[2], i <= 2 end
+	local lines, top = PHY_LINES_5G, 150000
+	if freq <= 5000 then lines, top = PHY_LINES_49G, 30000 end
+	if r >= top then return 100, false end
+	for _, l in ipairs(lines) do
+		if r >= l[3] and r <= l[4] then
+			local f = (r - l[3]) / (l[4] - l[3])
+			-- vcvt.s32.f32: toward zero
+			return math.floor(l[2] * f + l[1] * (1 - f)), r <= 12000
+		end
 	end
-	return 100, false
+	return 0, true
 end
 
 -- tries/retries/dropped: the last minute's attempts (frames delivered plus
@@ -105,7 +128,7 @@ function M.retry_score(tries, retries, dropped)
 	return score, score < 50
 end
 
--- in: {snr, tx_kbps, rx_kbps, tries, retries, dropped}. Returns score,
+-- in: {snr, tx_kbps, rx_kbps, freq, tries, retries, dropped}. Returns score,
 -- reason, anomalies, or nil without an snr.
 function M.score(input)
 	if not input.snr then return nil end
@@ -116,7 +139,7 @@ function M.score(input)
 		if anomaly then anomalies = anomalies + bit end
 		if value < score then score, reason = value, bit end
 	end
-	local p, p_anomaly = M.phy_score(input.tx_kbps, input.rx_kbps)
+	local p, p_anomaly = M.phy_score(input.tx_kbps, input.rx_kbps, input.freq)
 	term(p, M.PHY_RATE, p_anomaly)
 	term(100, M.TCP_LOSS, false)
 	term(100, M.TCP_LATENCY, false)
