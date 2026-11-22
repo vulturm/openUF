@@ -241,6 +241,19 @@ config = {
 	-- channel with its own backhaul) or where the parent sits on DFS channels.
 	uplink_radio_aps = true,
 
+	-- Which AP a wireless (mesh) child's uplink sits on. preferred_parent is
+	-- that AP's MAC (the one the controller lists the device by): the uplink
+	-- roams to its downlink whenever a scan hears it at -75 dBm or better,
+	-- and joins any other while it does not. It wins over the controller's
+	-- Uplink setting, which only lists wired APs -- so a parent that is
+	-- itself one hop out can only be named here. With neither set,
+	-- mesh_parent_auto moves the uplink to a UniFi downlink at least 10 dB
+	-- louder than the current one and at most one hop further from the wire;
+	-- false keeps whichever parent the uplink joined first. No wifi reload
+	-- either way, at most one attempt every 10 minutes.
+	preferred_parent = nil,
+	mesh_parent_auto = true,
+
 	-- Follow the controller's Band Steering and Roaming Assistant on THIS AP.
 	-- Both run through usteer, and usteer rewrites every 802.11k neighbour
 	-- list once a second with the APs that run usteer only, so a client is

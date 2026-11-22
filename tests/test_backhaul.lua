@@ -839,4 +839,56 @@ return {
 			backhaul._roam_at = nil
 		end
 	},
+	{
+		name = "backhaul: follow_preferred_parent() takes conf.lua's preferred_parent, and auto moves only to a clearly better, near downlink",
+		fn = function()
+			local o_popen, o_exec, o_log = backhaul._popen, backhaul._exec, backhaul._log
+			local cmds = {}
+			backhaul._popen = function() return "Connected to 8e:78:48:06:03:fd (on phy0-sta0)\n" end
+			backhaul._exec = function(c) cmds[#cmds + 1] = c; return 0 end
+			backhaul._log = function() end
+			local ssid = "vwire-edac2772347aef1a"
+			local function dl(bssid, peer, sig, hop)
+				return {bssid = bssid, essid = nil, signal = sig, age = 0, peer_mac = peer,
+					mesh_downlink = hop ~= nil or nil, mesh_hop = hop}
+			end
+			local scan = {
+				dl("8e:78:48:06:03:fd", "84:78:48:06:03:f9", -71, 0),   -- on it: wired U7
+				dl("b2:9c:6c:b8:ab:80", "a8:9c:6c:b8:ab:7e", -55, 1),   -- meshed U7, 16 dB louder
+			}
+			local si = {scan_table = function() return scan end}
+			-- Named locally, over the controller's choice.
+			backhaul._roam_at = nil
+			local cfg = {config = {preferred_parent = "a8:9c:6c:b8:ab:7e"}}
+			assert_eq(backhaul.follow_preferred_parent({backhaul_parent = "84:78:48:06:03:f9"},
+				"phy0-sta0", ssid, si, 1000, cfg), "b2:9c:6c:b8:ab:80", "conf.lua wins over the controller")
+			-- Auto: 16 dB louder, one hop further -> move.
+			backhaul._roam_at = nil
+			assert_eq(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 2000, {config = {}}),
+				"b2:9c:6c:b8:ab:80", "auto: clearly better and one hop out")
+			-- Auto: only 6 dB louder -> stay.
+			backhaul._roam_at = nil
+			scan[2].signal = -65
+			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 3000, {config = {}}),
+				"auto: under the margin")
+			-- Auto: louder, but two hops further (a child of ours) -> stay.
+			backhaul._roam_at = nil
+			scan[2].signal, scan[2].mesh_hop = -50, 2
+			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 4000, {config = {}}),
+				"auto: never two hops further")
+			-- Auto: no hop count (openUF's own downlink) -> not a candidate.
+			backhaul._roam_at = nil
+			scan[2].mesh_hop, scan[2].mesh_downlink = nil, nil
+			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 5000, {config = {}}),
+				"auto: a downlink without a hop count")
+			-- Auto off.
+			backhaul._roam_at = nil
+			scan[2].mesh_hop, scan[2].mesh_downlink = 1, true
+			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 6000,
+				{config = {mesh_parent_auto = false}}), "mesh_parent_auto = false")
+			assert_eq(#cmds, 2, "two roams in all")
+			backhaul._popen, backhaul._exec, backhaul._log = o_popen, o_exec, o_log
+			backhaul._roam_at = nil
+		end
+	},
 }

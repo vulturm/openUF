@@ -353,7 +353,7 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		-- hostapd is running the CAC: nothing to judge until it ends
 	elseif new_mode == "wireless" and mode == "wireless" then
 		pcall(M.follow_parent_channel, st, ufuci, sta_if, secs[1].radio)
-		pcall(M.follow_preferred_parent, st, sta_if, secs[1].ssid, sysinfo)
+		pcall(M.follow_preferred_parent, st, sta_if, secs[1].ssid, sysinfo, nil, cfg)
 		local ok_s, stall = pcall(M.check_ap_stall, sta_if, secs[1].radio)
 		if ok_s and stall then pcall(M.cac_start, st, cfg, ufuci, stall) end
 	elseif M.ap_stall or M._stall_ticks > 0 then
@@ -743,26 +743,47 @@ function M.parent_for_bssid(st, bssid, ifname, sysinfo)
 	return nil
 end
 
--- The parent the controller names (Uplink -> mesh.serial1, st.backhaul_parent)
--- is otherwise only reported: the station joins whichever downlink of the
--- backhaul SSID wpa_supplicant likes best. A child of a parent that itself
--- went wireless stays on the wired AP's weaker downlink for good -- a hAP ac
--- sat at -71 dBm on the wired U7 (MCS3, 117 Mbit/s) with its usual parent,
--- now itself on the air, heard at -55. So a station not on that parent is asked to ROAM to its downlink
--- when a fresh scan has it. A roam, not a `bssid` in UCI: no wifi reload,
--- and with the parent gone wpa_supplicant reconnects to any downlink on
--- its own. At most one attempt per ROAM_EVERY, so a parent heard but not
--- joinable is not retried every heartbeat.
+-- Which parent the uplink station sits on. Left alone, it joins whichever
+-- downlink of the backhaul SSID wpa_supplicant likes best when it connects,
+-- and stays there while the link holds: a hAP ac that rejoined while its
+-- usual parent was itself going wireless sat at -71 dBm on the wired U7
+-- (MCS3, 117 Mbit/s) with that parent back and heard at -55. Two ways out:
+--
+--   named   conf.lua preferred_parent (this AP's own choice), else the
+--           controller's Uplink (mesh.serial1 -> st.backhaul_parent). The
+--           controller lists only wired APs there, so a parent one hop out
+--           can only be named locally. A station elsewhere roams to the
+--           named AP's downlink when a fresh scan hears it.
+--   auto    nothing named, mesh_parent_auto on: a UniFi downlink at least
+--           AUTO_MARGIN dB louder than the current one, at most one hop
+--           further from the wire (tag 0x87 of its element), is worth the
+--           move -- the margin keeps the station from swapping on noise, and
+--           the hop limit means it never picks a child of its own (two
+--           further) or a chain growing with every move. A downlink without
+--           the hop count (openUF's own) is never an auto candidate.
+--
+-- A roam, not a `bssid` in UCI: no wifi reload, and with the parent gone
+-- wpa_supplicant reconnects to any downlink on its own. At most one attempt
+-- per ROAM_EVERY, so a parent heard but not joinable is not retried every
+-- heartbeat.
 M.ROAM_EVERY = 600
 M.ROAM_MIN_SIGNAL = -75   -- dBm; a parent weaker than this is not worth the hop
 M.ROAM_MAX_AGE = 120      -- s; a scan entry older than this may be a parent gone
+M.AUTO_MARGIN = 10        -- dB louder than the current downlink, for auto
 M._roam_at = nil
 
-function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now)
-	local want = st and st.backhaul_parent
-	if not is_mac(want) or not valid_ifname(sta_if) then return nil end
-	if not (sysinfo and sysinfo.scan_table) then return nil end
-	want = want:lower()
+local function roam(sta_if, bssid)
+	M._exec("ubus call wpa_supplicant." .. sta_if .. " control '{\"command\":\"ROAM "
+		.. bssid .. "\"}' >/dev/null 2>&1")
+end
+
+function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now, cfg)
+	if not valid_ifname(sta_if) or not (sysinfo and sysinfo.scan_table) then return nil end
+	local conf = cfg and cfg.config or {}
+	local want, source = conf.preferred_parent, "conf.lua preferred_parent"
+	if not is_mac(want) then want, source = st and st.backhaul_parent, "the controller's Uplink" end
+	want = is_mac(want) and want:lower() or nil
+	if not want and conf.mesh_parent_auto == false then return nil end
 	now = now or os.time()
 	if M._roam_at and now - M._roam_at < M.ROAM_EVERY then return nil end
 	local cur = (M._popen("iw dev " .. sta_if .. " link") or "")
@@ -770,31 +791,48 @@ function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now)
 	if not cur then return nil end   -- not joined: wpa_supplicant is at it
 	cur = cur:lower()
 	local ok, entries = pcall(sysinfo.scan_table, sta_if)
-	local best = nil
+	local here, best = nil, nil
 	for _, e in ipairs((ok and type(entries) == "table") and entries or {}) do
 		local b = type(e) == "table" and type(e.bssid) == "string" and e.bssid:lower()
 		local peer = b and (e.serialno or e.peer_mac)
-		if b and is_mac(peer) and peer:lower() == want then
-			if b == cur then return nil end   -- already on it
-			-- The downlink is hidden: a scan lists it with no SSID, or with
-			-- the backhaul SSID once probed. The parent's client WLANs on
-			-- the same radio carry their own SSIDs and are not it.
-			local essid = e.essid or e.ssid
-			local sig = tonumber(e.signal)
-			if (essid == nil or essid == "" or essid == ssid)
-					and sig and sig >= M.ROAM_MIN_SIGNAL
-					and (tonumber(e.age) or 0) <= M.ROAM_MAX_AGE
+		peer = is_mac(peer) and peer:lower() or nil
+		local sig = b and tonumber(e.signal)
+		-- The downlink is hidden: a scan lists it with no SSID, or with
+		-- the backhaul SSID once probed. The parent's client WLANs on the
+		-- same radio carry their own SSIDs and are not it.
+		local essid = b and (e.essid or e.ssid)
+		local is_dl = b and (essid == nil or essid == "" or essid == ssid)
+		if b == cur and is_dl then
+			if want and peer == want then return nil end   -- already on it
+			here = {sig = sig, hop = tonumber(e.mesh_hop)}
+		elseif is_dl and peer and sig and sig >= M.ROAM_MIN_SIGNAL
+				and (tonumber(e.age) or 0) <= M.ROAM_MAX_AGE then
+			if want then
+				if peer == want and (not best or sig > best.sig) then
+					best = {bssid = b, sig = sig, peer = peer}
+				end
+			elseif e.mesh_downlink and tonumber(e.mesh_hop)
 					and (not best or sig > best.sig) then
-				best = {bssid = b, sig = sig}
+				best = {bssid = b, sig = sig, peer = peer, hop = tonumber(e.mesh_hop)}
 			end
 		end
 	end
 	if not best then return nil end
+	if not want then
+		-- auto: against the downlink the station is on. Unknown signal or
+		-- hop count there is no ground for a move.
+		if not (here and here.sig and here.hop) then return nil end
+		if best.sig < here.sig + M.AUTO_MARGIN or best.hop > here.hop + 1 then return nil end
+		M._roam_at = now
+		M._log(("uplink on %s (%d dBm, %d hop(s) out): roaming to %s's downlink %s (%d dBm, %d hop(s) out)")
+			:format(cur, here.sig, here.hop, best.peer, best.bssid, best.sig, best.hop))
+		roam(sta_if, best.bssid)
+		return best.bssid
+	end
 	M._roam_at = now
-	M._log(("uplink on %s, not on the parent the controller names (%s): roaming to its downlink %s (%d dBm)")
-		:format(cur, want, best.bssid, best.sig))
-	M._exec("ubus call wpa_supplicant." .. sta_if .. " control '{\"command\":\"ROAM "
-		.. best.bssid .. "\"}' >/dev/null 2>&1")
+	M._log(("uplink on %s, not on the parent %s names (%s): roaming to its downlink %s (%d dBm)")
+		:format(cur, source, want, best.bssid, best.sig))
+	roam(sta_if, best.bssid)
 	return best.bssid
 end
 

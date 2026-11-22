@@ -48,6 +48,7 @@
 	      option unifi_sibling_ie '1'     option dfs_cac_recover '0'
 	      option uplink_radio_aps '1'     option controller_steering '1'
 	      option handover_before_reload '1' option client_steering '0'
+	      option preferred_parent ''      option mesh_parent_auto '1'
 	      list plugin 'name'              (third-party plugins, USAGE.md "Plugins")
 	      (debug_caps and debug_payload_extra stay conf.lua-only: they are
 	      research switches, not settings)
@@ -169,11 +170,11 @@ end
 local BOOL_OPTS = {"use_only_unifi_wlan", "l2_announce", "rrm_enrichment", "debug_dump_requests",
 	"encrypted_syslog", "apply_rollback", "neighbour_list", "device_login", "igmp_snooping",
 	"unifi_sibling_ie", "dfs_cac_recover", "uplink_radio_aps", "controller_steering",
-	"handover_before_reload", "client_steering"}
+	"handover_before_reload", "client_steering", "mesh_parent_auto"}
 local NUM_OPTS  = {"neighbour_scan_interval", "rrm_request_interval", "roam_assist_diff_db",
 	"debug_dump_max_bytes", "rts_threshold_ng", "rts_threshold_na"}
 local STR_OPTS  = {"inform_url", "state_file", "unhandled_file", "debug_dump_file",
-	"country_override", "bootstrap_adopt_user"}
+	"country_override", "bootstrap_adopt_user", "preferred_parent"}
 
 local function shallow_copy(t)
 	local out = {}
