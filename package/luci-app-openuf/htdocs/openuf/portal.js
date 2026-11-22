@@ -634,6 +634,10 @@
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Wireless uplink (mesh)'),
 			row('Serve clients on the uplink radio', 'When off, a wirelessly meshed access point keeps its uplink radio for the uplink alone; its networks stay on the other radios and come back when a cable takes over. The controller cannot set this.', toggle('uplink_radio_aps', '1', ro), { inline: true }),
+			row('Preferred parent', 'The MAC address of the access point the wireless uplink should use, as the controller lists it. The uplink moves to it whenever it hears it well enough and uses any other while it does not. The controller\'s own Uplink setting offers only wired access points; this one also takes a parent that is itself meshed. Empty: none.',
+				text('preferred_parent', '', { placeholder: 'aa:bb:cc:dd:ee:ff', disabled: !!ro },
+					v => v === '' || /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/.test(v))),
+			row('Move to a clearly better parent', 'With no parent named, the uplink moves to an access point heard at least 10 dB louder than its current one and at most one hop further from the wire. Off: it stays on the parent it joined first.', toggle('mesh_parent_auto', '1', ro), { inline: true }),
 			row('Recover networks after a DFS move', 'When the parent moves to a radar (DFS) channel this radio has not checked, its networks stay off the air. On, the access points are restarted to run the radar check, with the uplink kept up; they return a minute later (ten on channels 120–128). Experimental.', toggle('dfs_cac_recover', '0', ro), { inline: true })
 		));
 
