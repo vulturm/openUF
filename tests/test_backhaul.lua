@@ -868,11 +868,23 @@ return {
 			backhaul._roam_at = nil
 			assert_eq(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 2000, {config = {}}),
 				"b2:9c:6c:b8:ab:80", "auto: clearly better and one hop out")
-			-- Auto: only 6 dB louder -> stay.
+			-- Auto: only 6 dB louder, minus 3 for the hop -> stay.
 			backhaul._roam_at = nil
 			scan[2].signal = -65
 			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 3000, {config = {}}),
 				"auto: under the margin")
+			-- The case it was written for: -64 on the wired AP, -56 one hop out
+			-- (scores -64 and -59) -> move; and from there, not back.
+			backhaul._roam_at = nil
+			scan[1].signal, scan[2].signal = -64, -56
+			assert_eq(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 3500, {config = {}}),
+				"b2:9c:6c:b8:ab:80", "auto: 8 dB louder one hop out is the better parent")
+			backhaul._roam_at = nil
+			backhaul._popen = function() return "Connected to b2:9c:6c:b8:ab:80 (on phy0-sta0)\n" end
+			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 3600, {config = {}}),
+				"auto: and no swap back")
+			backhaul._popen = function() return "Connected to 8e:78:48:06:03:fd (on phy0-sta0)\n" end
+			scan[1].signal = -71
 			-- Auto: louder, but two hops further (a child of ours) -> stay.
 			backhaul._roam_at = nil
 			scan[2].signal, scan[2].mesh_hop = -50, 2
@@ -888,7 +900,7 @@ return {
 			scan[2].mesh_hop, scan[2].mesh_downlink = 1, true
 			assert_nil(backhaul.follow_preferred_parent({}, "phy0-sta0", ssid, si, 6000,
 				{config = {mesh_parent_auto = false}}), "mesh_parent_auto = false")
-			assert_eq(#cmds, 4, "two roams in all, each after its probe")
+			assert_eq(#cmds, 6, "three roams in all, each after its probe")
 			backhaul._popen, backhaul._exec, backhaul._log = o_popen, o_exec, o_log
 			backhaul._roam_at = nil
 		end

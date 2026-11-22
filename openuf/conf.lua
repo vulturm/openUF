@@ -247,10 +247,12 @@ config = {
 	-- and joins any other while it does not. It wins over the controller's
 	-- Uplink setting, which only lists wired APs -- so a parent that is
 	-- itself one hop out can only be named here. With neither set,
-	-- mesh_parent_auto moves the uplink to a UniFi downlink at least 10 dB
-	-- louder than the current one and at most one hop further from the wire;
-	-- false keeps whichever parent the uplink joined first. No wifi reload
-	-- either way, at most one attempt every 10 minutes.
+	-- mesh_parent_auto moves the uplink to the best UniFi downlink heard:
+	-- each wireless hop further from the wire counts as 3 dB of signal, a
+	-- move needs 5 dB over the current parent on that score, and never to a
+	-- parent more than one hop further out. false keeps whichever parent the
+	-- uplink joined first. No wifi reload either way, at most one attempt
+	-- every 10 minutes.
 	preferred_parent = nil,
 	mesh_parent_auto = true,
 

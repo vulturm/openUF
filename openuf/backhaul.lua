@@ -754,13 +754,18 @@ end
 --           controller lists only wired APs there, so a parent one hop out
 --           can only be named locally. A station elsewhere roams to the
 --           named AP's downlink when a fresh scan hears it.
---   auto    nothing named, mesh_parent_auto on: a UniFi downlink at least
---           AUTO_MARGIN dB louder than the current one, at most one hop
---           further from the wire (tag 0x87 of its element), is worth the
---           move -- the margin keeps the station from swapping on noise, and
---           the hop limit means it never picks a child of its own (two
---           further) or a chain growing with every move. A downlink without
---           the hop count (openUF's own) is never an auto candidate.
+--   auto    nothing named, mesh_parent_auto on: the best downlink heard.
+--           Each wireless hop further from the wire counts as AUTO_HOP_DB
+--           of signal, and a move needs AUTO_MARGIN dB over the current
+--           parent on that score, so the station does not swap on noise.
+--           The extra hop costs little where the parent's own uplink is
+--           fast: the hAP ac above went from 117 to 351 Mbit/s TX (expected
+--           throughput 101 -> 298) on the meshed U7 one hop out, heard only
+--           8 dB louder in scans. A parent more than one hop further than
+--           the current one is never picked, so the station never joins a
+--           child of its own (two further) or grows a chain with every move.
+--           A downlink without the hop count (openUF's own) is never an
+--           auto candidate.
 --
 -- A roam, not a `bssid` in UCI: no wifi reload, and with the parent gone
 -- wpa_supplicant reconnects to any downlink on its own. At most one attempt
@@ -769,7 +774,8 @@ end
 M.ROAM_EVERY = 600
 M.ROAM_MIN_SIGNAL = -75   -- dBm; a parent weaker than this is not worth the hop
 M.ROAM_MAX_AGE = 120      -- s; a scan entry older than this may be a parent gone
-M.AUTO_MARGIN = 10        -- dB louder than the current downlink, for auto
+M.AUTO_HOP_DB = 3         -- dB of signal one more wireless hop is worth, for auto
+M.AUTO_MARGIN = 5         -- dB the best must beat the current parent by, on that score
 M._roam_at = nil
 
 -- wpa_supplicant's ROAM looks the target up in its own BSS table under the
@@ -828,9 +834,13 @@ function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now, cfg)
 				if peer == want and (not best or sig > best.sig) then
 					best = {bssid = b, sig = sig, peer = peer, freq = tonumber(e.freq)}
 				end
-			elseif e.mesh_downlink and tonumber(e.mesh_hop)
-					and (not best or sig > best.sig) then
-				best = {bssid = b, sig = sig, peer = peer, hop = tonumber(e.mesh_hop), freq = tonumber(e.freq)}
+			elseif e.mesh_downlink and tonumber(e.mesh_hop) then
+				local hop = tonumber(e.mesh_hop)
+				local score = sig - M.AUTO_HOP_DB * hop
+				if not best or score > best.score then
+					best = {bssid = b, sig = sig, peer = peer, hop = hop, score = score,
+						freq = tonumber(e.freq)}
+				end
 			end
 		end
 	end
@@ -839,7 +849,8 @@ function M.follow_preferred_parent(st, sta_if, ssid, sysinfo, now, cfg)
 		-- auto: against the downlink the station is on. Unknown signal or
 		-- hop count there is no ground for a move.
 		if not (here and here.sig and here.hop) then return nil end
-		if best.sig < here.sig + M.AUTO_MARGIN or best.hop > here.hop + 1 then return nil end
+		local here_score = here.sig - M.AUTO_HOP_DB * here.hop
+		if best.score < here_score + M.AUTO_MARGIN or best.hop > here.hop + 1 then return nil end
 		M._roam_at = now
 		M._log(("uplink on %s (%d dBm, %d hop(s) out): roaming to %s's downlink %s (%d dBm, %d hop(s) out)")
 			:format(cur, here.sig, here.hop, best.peer, best.bssid, best.sig, best.hop))
