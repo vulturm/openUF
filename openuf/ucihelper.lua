@@ -2857,6 +2857,12 @@ function M.apply_config(resp, cfg, opts)
 				-- so switching it off in the controller leaves nothing behind.
 				extra.openuf_roam_assist = tostring(vap.roam_assist_rssi or -75)
 			end
+			if vap.band_steer then
+				-- Band Steering carried out by clientmatch.lua (inform's
+				-- _local_steering_gate), read back by get_vap_table so that it
+				-- survives a restart with no push.
+				extra.openuf_band_steer = "1"
+			end
 			if vap.schedule_lines then
 				-- "WiFi Blackout Schedule": the firmware's schedule lines,
 				-- read back by schedule_vaps for inform's heartbeat check
@@ -4150,6 +4156,7 @@ function M.get_vap_table()
 			-- Internal, never serialized: build_json consumes it for
 			-- Roaming Assistant and removes it.
 			roam_assist_rssi = tonumber(s.openuf_roam_assist),
+			band_steer = s.openuf_band_steer == "1" or nil,
 			-- Internal, never serialized: WiFi Speed Limit (kbps), for
 			-- inform's _shaper_resync.
 			ratelimit_down = tonumber(s.openuf_ratelimit_down),

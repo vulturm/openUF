@@ -586,7 +586,7 @@ return {
 		end
 	},
 	{
-		name = "inform packet: handle_response derives band_steering_active from vap_table.no2ghz_oui and drives usteer",
+		name = "inform packet: with use_usteer, band_steering_active from vap_table.no2ghz_oui drives usteer",
 		fn = function()
 			local st = sample_state()
 			local captured_enabled, captured_cfg
@@ -598,7 +598,7 @@ return {
 			inform._ucihelper = {
 				apply_config = function(_, _, opts) applied_opts = opts end,
 			}
-			local cfg = {net = {lan_cpueth = "eth0"}}
+			local cfg = {net = {lan_cpueth = "eth0"}, config = {use_usteer = true}}
 			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
 				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\nwireless.1.no2ghz_oui=enabled\n"
 			local resp = ('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg:gsub("\n", "\\n"))
@@ -827,7 +827,7 @@ return {
 		end
 	},
 	{
-		name = "inform packet: handle_response runs usteer and forces 802.11k/v for Roaming Assistant",
+		name = "inform packet: with use_usteer, handle_response runs usteer and forces 802.11k/v for Roaming Assistant",
 		fn = function()
 			local st = sample_state()
 			local args
@@ -841,7 +841,7 @@ return {
 				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio1\n"
 				.. "wireless.1.btm_disassoc.status=enabled\nwireless.1.btm_disassoc.threshold=-75\n"
 			local resp = ('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg:gsub("\n", "\\n"))
-			inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}})
+			inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}, config = {use_usteer = true}})
 			inform._usteer.set_enabled = orig
 			inform._ucihelper = nil
 			assert_false(args[1], "band steering itself stays off")
@@ -7071,17 +7071,36 @@ return {
 		end
 	},
 	{
-		name = "inform: controller_steering=false stops usteer on this AP only",
+		name = "inform: the controller's steering is openUF's, usteer's only with use_usteer",
 		fn = function()
-			local vaps = {{no2ghz_oui = true, roam_assist_enabled = true, ssid = "home"}}
-			local s, r = inform._local_steering_gate(vaps, {config = {}}, true, true)
-			assert_true(s and r, "absent option: the controller's settings stand")
-			assert_true(vaps[1].no2ghz_oui, "absent option: the vap keeps its flags")
-			s, r = inform._local_steering_gate(vaps, {config = {controller_steering = false}}, true, true)
-			assert_false(s, "off: usteer does not band-steer")
+			local function vaps() return {{no2ghz_oui = true, roam_assist_enabled = true, ssid = "home"},
+				{roam_assist_enabled = true, ssid = "guest"}} end
+			local saved = inform._steering_why
+			inform._steering_why = nil
+			local v = vaps()
+			local s, r = inform._local_steering_gate(v, {config = {}}, true, true)
+			assert_false(s, "by default usteer does not band-steer")
+			assert_false(r, "nor is it kept for Roaming Assistant")
+			assert_true(v[1].band_steer, "the WLAN with Band Steering is clientmatch's")
+			assert_nil(v[2].band_steer, "the other is not")
+			assert_true(v[1].roam_assist_enabled, "Roaming Assistant keeps its stamp")
+			inform._steering_why = {band_device = "prefer_5g"}
+			v = vaps()
+			inform._local_steering_gate(v, {config = {}}, true, true)
+			assert_true(v[2].band_steer, "the device's Prefer 5 GHz covers every WLAN")
+			inform._steering_why = nil
+			v = vaps()
+			s, r = inform._local_steering_gate(v, {config = {use_usteer = true}}, true, true)
+			assert_true(s and r, "use_usteer: the controller's settings go to usteer")
+			assert_nil(v[1].band_steer, "and none to clientmatch")
+			v = vaps()
+			s, r = inform._local_steering_gate(v, {config = {controller_steering = false, use_usteer = true}}, true, true)
+			assert_false(s, "off: nothing band-steers")
 			assert_false(r, "off: usteer is not kept for Roaming Assistant")
-			assert_true(vaps[1].no2ghz_oui, "off: the WLAN's Band Steering flag is left to apply_config")
-			assert_false(vaps[1].roam_assist_enabled, "off: no roam-assist stamp, roamassist stays quiet")
+			assert_nil(v[1].band_steer, "off: no band stamp")
+			assert_true(v[1].no2ghz_oui, "off: the WLAN's flag is left to apply_config")
+			assert_false(v[1].roam_assist_enabled, "off: no roam-assist stamp")
+			inform._steering_why = saved
 		end
 	},
 	{

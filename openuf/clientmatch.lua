@@ -36,10 +36,14 @@
 	device answers such a request with nothing: its rounds back off, from
 	UP_GAP doubling up to UP_GAP_MAX.
 
-	A WLAN under the controller's Roaming Assistant is roamassist.lua's, and
-	while usteer steers (Band Steering) nothing is steered here at all
-	(inform.lua builds the observations): a client is never pushed by two
-	steerers that disagree, back and forth between the bands.
+	This is what carries out the controller's two settings unless conf.lua
+	use_usteer says otherwise (inform._local_steering_gate): Roaming Assistant
+	is the weak-client move, at the WLAN's own threshold (obs.floor), and Band
+	Steering is the move up from 2.4 GHz. Neither disconnects: a UniFi AP
+	follows its request with a disassociation, this does not. conf.lua
+	client_steering asks for both on every WLAN. While usteer runs nothing is
+	steered here (inform.lua builds the observations): a client is never pushed
+	by two steerers that disagree, back and forth between the bands.
 ]]--
 
 local M = {}
@@ -197,8 +201,10 @@ function M.op_class(channel, band)
 	return nil
 end
 
--- One heartbeat. observations: {ifname, ssid, mac, signal, connected_sec}
--- for every client of a WLAN this module may steer. opts.reports: the
+-- One heartbeat. observations: {ifname, ssid, mac, signal, connected_sec,
+-- op_class, channel, floor, weak, up} for every client of a WLAN this module
+-- may steer. floor: this WLAN's weak-signal line (FLOOR when nil); weak=false
+-- and up=false turn off the weak-client move and the move up from 2.4 GHz. opts.reports: the
 -- per-station view ({[mac] = {[bssid] = {signal, seen_at}}}); opts.request:
 -- rrmscan.request; opts.capable(ifname): rrmscan.capable_stations;
 -- opts.diff_db; opts.on_steer(mac). Returns the number of BTM requests sent.
@@ -268,14 +274,16 @@ function M.tick(observations, now, opts)
 			cs.seen_at = now
 			local settled = (tonumber(o.connected_sec) or 0) >= M.MIN_CONNECTED
 				and (not cs.acted_at or now - cs.acted_at >= M.COOLDOWN)
-			if signal >= M.FLOOR then
+			local floor = tonumber(o.floor) or M.FLOOR
+			if signal >= floor or o.weak == false then
 				cs.below_since = nil
 				if cs.round == "weak" then cs.asking, cs.round = nil, nil end
 				-- The time gates first: this runs for every 2.4 GHz client on
 				-- every heartbeat, and btm_of is a ubus call.
 				local due = not cs.up_at or now - cs.up_at >= (cs.up_gap or M.UP_GAP)
 				local answering = cs.up_at and now - cs.up_at <= M.REPORT_MAX_AGE
-				if band_rank(o.op_class) == 1 and settled and (cs.asking or due or answering)
+				if o.up ~= false and band_rank(o.op_class) == 1 and settled
+						and (cs.asking or due or answering)
 						and btm_of(o.ifname, mac) then
 					local own = own_of(o.ifname)
 					local best = not cs.asking
@@ -302,7 +310,7 @@ function M.tick(observations, now, opts)
 					-- Not in the middle of a round: the first channel to answer
 					-- is not yet the best one.
 					local best = not cs.asking
-						and M.pick(o, reports[mac] or {}, nr_of(o.ifname), own, now, opts.diff_db)
+						and M.pick(o, reports[mac] or {}, nr_of(o.ifname), own, now, opts.diff_db, floor)
 					if best then
 						steer(o, mac, cs, best, ("here at %d"):format(best.here))
 					else

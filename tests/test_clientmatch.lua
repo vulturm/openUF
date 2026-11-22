@@ -203,4 +203,34 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "clientmatch: a WLAN's own threshold, and only the move its setting asks for",
+		fn = function()
+			with_ap(function(sent)
+				local asked = 0
+				local M = "a8:db:03:35:45:cc"
+				local reports = {}
+				local opts = {reports = reports, capable = function() return {M} end,
+					request = function() asked = asked + 1 end}
+				local function o(sig, extra)
+					local t = obs(sig)
+					for k, v in pairs(extra) do t[1][k] = v end
+					return t
+				end
+				-- Roaming Assistant at -75: -72 is not weak there.
+				cm.tick(o(-72, {floor = -75, up = false}), 1000, opts)
+				cm.tick(o(-72, {floor = -75, up = false}), 1000 + cm.HOLD, opts)
+				assert_eq(asked, 0, "above the WLAN's threshold")
+				cm.tick(o(-78, {floor = -75, up = false}), 2000, opts)
+				cm.tick(o(-78, {floor = -75, up = false}), 2000 + cm.HOLD, opts)
+				assert_eq(asked, 1, "below it: measured")
+				cm._state, asked = {}, 0
+				-- Band Steering alone: no weak-client move.
+				cm.tick(o(-80, {weak = false, up = true}), 3000, opts)
+				cm.tick(o(-80, {weak = false, up = true}), 3000 + cm.HOLD, opts)
+				assert_eq(asked, 0, "the list has no higher band, and no weak round is started")
+				assert_eq(#sent, 0, "nothing sent")
+			end)
+		end
+	},
 }

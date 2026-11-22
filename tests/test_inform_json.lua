@@ -1442,6 +1442,8 @@ return {
 			local seen, seen_now, seen_opts
 			local orig = inform._roamassist
 			inform._roamassist = {tick = function(o, now, opts) seen, seen_now, seen_opts = o, now, opts end}
+			local o_fw = inform._usteer.filter_wanted
+			inform._usteer.filter_wanted = function() return true end
 			local st = {
 				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
 				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
@@ -1449,6 +1451,7 @@ return {
 			}
 			local d = cjson.decode(inform.build_json(st, {config = {roam_assist_diff_db = 6}}, ufhw))
 			inform._roamassist = orig
+			inform._usteer.filter_wanted = o_fw
 			assert_eq(#seen, 2, "both stations observed")
 			local by_mac = {}
 			for _, o in ipairs(seen) do by_mac[o.mac] = o end
@@ -1482,6 +1485,8 @@ return {
 			local seen
 			local orig = inform._roamassist
 			inform._roamassist = {tick = function(o) seen = o end}
+			local o_fw = inform._usteer.filter_wanted
+			inform._usteer.filter_wanted = function() return true end
 			local st = {
 				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
 				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
@@ -1489,11 +1494,62 @@ return {
 			}
 			local ok, err = pcall(inform.build_json, st, nil, ufhw)
 			inform._roamassist = orig
+			inform._usteer.filter_wanted = o_fw
 			if not ok then error(err, 0) end
 			assert_eq(#seen, 1, "only the station above Minimum RSSI")
 			assert_eq(seen[1].mac, "aa:bb:cc:dd:ee:ff", "the -62 dBm one")
 			assert_eq(inform._minrssi._low_since["11:22:33:44:55:66"] ~= nil, true,
 				"the -75 dBm one is Minimum RSSI's")
+		end
+	},
+	{
+		-- The controller's two settings, carried out without usteer.
+		name = "inform json: Roaming Assistant and Band Steering go to clientmatch unless usteer runs",
+		fn = function()
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local base = inform._ucihelper.get_vap_table
+			local band, rssi = true, -72
+			inform._ucihelper.get_vap_table = function()
+				local v = base()
+				v[1].roam_assist_rssi, v[1].band_steer = rssi, band
+				return v
+			end
+			local seen, roam
+			local o_cm, o_ra, o_fw = inform._clientmatch, inform._roamassist, inform._usteer.filter_wanted
+			inform._clientmatch = {op_class = function() return 81 end, tick = function(o) seen = o end}
+			inform._roamassist = {tick = function(o) roam = o end}
+			local runs = false
+			inform._usteer.filter_wanted = function() return runs end
+			local st = {authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap"}
+			local ok, err = pcall(function()
+				local d = cjson.decode(inform.build_json(st, {config = {}}, ufhw))
+				assert_eq(#seen, 2, "both stations are clientmatch's")
+				assert_eq(seen[1].floor, -72, "at the WLAN's own threshold")
+				assert_true(seen[1].weak, "Roaming Assistant: the weak-client move")
+				assert_true(seen[1].up, "Band Steering: the move up")
+				assert_nil(roam, "roamassist is not used")
+				assert_true(inform._clientmatch_wanted, "the report collector is wanted")
+				assert_nil(d.vap_table[1].band_steer, "the internal flag stays off the wire")
+				seen, band, rssi = nil, true, nil
+				inform.build_json(st, {config = {}}, ufhw)
+				assert_false(seen[1].weak, "Band Steering alone: no weak-client move")
+				seen, band = nil, nil
+				inform.build_json(st, {config = {}}, ufhw)
+				assert_nil(seen, "neither setting: nothing observed")
+				assert_false(inform._clientmatch_wanted, "and no collector for it")
+				inform.build_json(st, {config = {client_steering = true}}, ufhw)
+				assert_true(seen[1].weak and seen[1].up, "client_steering: both, on any WLAN")
+				seen, runs, band, rssi = nil, true, true, -72
+				inform.build_json(st, {config = {client_steering = true}}, ufhw)
+				assert_nil(seen, "never while usteer runs")
+				assert_eq(#roam, 2, "Roaming Assistant is roamassist's then")
+			end)
+			inform._clientmatch, inform._roamassist, inform._usteer.filter_wanted = o_cm, o_ra, o_fw
+			inform._clientmatch_wanted = nil
+			if not ok then error(err, 0) end
 		end
 	},
 	{

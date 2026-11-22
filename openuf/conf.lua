@@ -256,15 +256,22 @@ config = {
 	preferred_parent = nil,
 	mesh_parent_auto = true,
 
-	-- Follow the controller's Band Steering and Roaming Assistant on THIS AP.
-	-- Both run through usteer, and usteer rewrites every 802.11k neighbour
-	-- list once a second with the APs that run usteer only, so a client is
-	-- never told about a genuine UniFi AP (nrlist.lua's header). The two are
-	-- site-wide WLAN settings in the controller; false turns them off here
-	-- alone: usteer stops, openUF keeps the neighbour lists, and the other
-	-- APs go on steering. The controller still shows both as on for this AP.
-	-- Changing it asks the controller for a fresh push, which applies it.
+	-- Follow the controller's Band Steering and Roaming Assistant on THIS AP,
+	-- carried out by clientmatch.lua: a client on 2.4 GHz that hears 5 GHz well
+	-- is asked to move up, and one under the WLAN's Roaming Assistant threshold
+	-- is asked to move to the AP it hears clearly better. Requests, never a
+	-- disconnect. The two are site-wide WLAN settings in the controller; false
+	-- ignores them here alone, and the controller still shows both as on for
+	-- this AP. Changing it asks the controller for a fresh push, which applies it.
 	controller_steering = true,
+
+	-- Carry out those two settings with usteer and roamassist.lua instead. For
+	-- a site of OpenWrt APs only, or with clients that have no 802.11k: usteer
+	-- compares what the APs hear, and Roaming Assistant then also disconnects.
+	-- It rewrites every 802.11k neighbour list once a second with the APs that
+	-- run usteer only, so in a site with genuine UniFi APs clients would never
+	-- be told about them (nrlist.lua's header). Applied by a fresh push.
+	use_usteer = false,
 
 	-- Before a `wifi reload` that restarts a BSS (a push changing a radio or a
 	-- WLAN), ask its clients to roam to the 802.11k neighbours first (BSS
@@ -280,9 +287,9 @@ config = {
 	-- a BSS of this one's 802.11k neighbour list 8 dB louder it gets a BSS
 	-- Transition request naming it -- a request, never a disconnect. A client
 	-- on 2.4 GHz that hears a listed 5/6 GHz BSS at -65 dBm or better gets the
-	-- same request whatever its signal here; none is sent to a lower band. Only
-	-- WLANs without the controller's Roaming Assistant, and only clients that
-	-- can make a beacon report. Off by default.
+	-- same request whatever its signal here; none is sent to a lower band. This
+	-- turns on, for every WLAN, what the controller's two settings turn on for
+	-- theirs. Only clients that can make a beacon report. Off by default.
 	client_steering = false,
 
 	-- Device SSH Authentication (controller: Settings -> System -> Advanced ->

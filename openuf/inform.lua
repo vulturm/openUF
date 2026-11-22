@@ -1488,16 +1488,20 @@ function M.build_json(st, cfg, ufhw)
 			radio_live_by_name[radio.name] = radio
 		end
 		local now = M._time()
-		-- Roaming Assistant: one observation per station on a vap that has
-		-- it on, decided on after the loop (see openuf/roamassist.lua).
+		-- With conf.lua use_usteer: Roaming Assistant is roamassist.lua's, on
+		-- usteer's cross-AP table, one observation per station of its vaps.
 		local roam_obs = {}
-		-- Client steering (conf.lua client_steering): every other station on
-		-- an ordinary WLAN, decided on after the loop (openuf/clientmatch.lua).
-		-- Not while usteer steers: two steerers that disagree push a client
-		-- back and forth between the bands.
-		local steer_on = cfg and cfg.config and cfg.config.client_steering == true
-			and not M._usteer_steering
+		-- Without it, both controller settings are clientmatch.lua's, and so
+		-- is conf.lua client_steering. Never while usteer runs: two steerers
+		-- that disagree push a client back and forth between the bands. Asked
+		-- of usteer's own stamp, which survives a daemon restart with no push.
+		local ok_ur, usteer_runs = pcall(function()
+			return M._usteer and M._usteer.filter_wanted and M._usteer.filter_wanted()
+		end)
+		usteer_runs = ok_ur and usteer_runs == true
+		local steer_all = cfg and cfg.config and cfg.config.client_steering == true
 		local steer_obs = {}
+		local steer_wanted = false
 		local staip_devs, staip_stas = {}, {}
 		-- Associated clients per band ("ng", "na", "6e"), for _write_status.
 		local client_counts = {}
@@ -1728,13 +1732,14 @@ function M.build_json(st, cfg, ufhw)
 					and minrssi_signal < minrssi_threshold
 				if is_backhaul_vap then
 					-- counters only; no kick, no roaming assistance
-				elseif not below_minrssi and vap.roam_assist_rssi and sta.signal then
+				elseif usteer_runs and not below_minrssi and vap.roam_assist_rssi and sta.signal then
 					roam_obs[#roam_obs + 1] = {
 						ifname = ifname, ssid = vap.essid, mac = sta.mac,
 						signal = sta.signal, connected_sec = sta.connected_sec,
 						threshold = vap.roam_assist_rssi,
 					}
-				elseif steer_on and not below_minrssi and sta.signal then
+				elseif not usteer_runs and (steer_all or vap.roam_assist_rssi or vap.band_steer)
+						and not below_minrssi and sta.signal then
 					-- The client's own channel and operating class, the first
 					-- of its round of beacon requests (clientmatch.channels_to_ask).
 					steer_obs[#steer_obs + 1] = {
@@ -1742,6 +1747,11 @@ function M.build_json(st, cfg, ufhw)
 						signal = sta.signal, connected_sec = sta.connected_sec,
 						channel = vap.channel,
 						op_class = M._clientmatch and M._clientmatch.op_class(vap.channel, vap.radio),
+						-- Roaming Assistant's threshold is the controller's, per
+						-- WLAN; Band Steering is the move up from 2.4 GHz.
+						floor = vap.roam_assist_rssi,
+						weak = (steer_all or vap.roam_assist_rssi ~= nil) and true or false,
+						up = (steer_all or vap.band_steer) and true or false,
 					}
 				end
 				local prev = M._sta_stats_cache[sta.mac]
@@ -2000,7 +2010,12 @@ function M.build_json(st, cfg, ufhw)
 				vap.cu_self_tx = cu.cu_self_tx
 				vap.cu_interf  = cu.cu_interf
 			end
+			if not is_backhaul_vap and not usteer_runs
+					and (steer_all or vap.roam_assist_rssi or vap.band_steer) then
+				steer_wanted = true
+			end
 			vap.roam_assist_rssi = nil  -- internal, consumed above
+			vap.band_steer = nil
 			vap.ratelimit_down, vap.ratelimit_up = nil, nil
 			if not ok_if then shape_obs.complete = false end
 		end
@@ -2036,10 +2051,12 @@ function M.build_json(st, cfg, ufhw)
 		end
 		M._client_counts = client_counts
 		M._staip_devs, M._staip_stas = staip_devs, staip_stas
+		M._clientmatch_wanted = steer_wanted
 		if M._clientmatch and #steer_obs > 0 then
 			local rrm = M._rrmscan
 			pcall(M._clientmatch.tick, steer_obs, now, {
 				reports = M._sta_reports,
+				diff_db = cfg and cfg.config and cfg.config.roam_assist_diff_db,
 				request = rrm and rrm.request, capable = rrm and rrm.capable_stations,
 			})
 		end
@@ -4432,18 +4449,33 @@ function M._steering_flags(vap_table, sys_raw)
 	return steering_active, roam_assist_active
 end
 
--- conf.lua `controller_steering = false`: this AP alone does not run usteer
--- for the controller's Band Steering and Roaming Assistant. Returns what
--- usteer.set_enabled gets. Only the vaps' Roaming Assistant flag goes too:
--- without usteer roamassist.lua can see no other AP and would log "usteer not
--- answering" every restart, so the WLANs get no roam-assist stamp. 802.11k/v,
--- which steering forces on, are apply_config's and stay as pushed.
+-- Who carries out the controller's Band Steering and Roaming Assistant here.
+-- Returns what usteer.set_enabled gets.
+--
+-- By default clientmatch.lua: it steers on what the client itself hears and
+-- keeps openUF's neighbour lists, which name the site's genuine UniFi APs.
+-- usteer knows only the APs that run usteer, and rewrites every list to say
+-- so. A WLAN with Band Steering (or every one, for the device's Prefer 5 GHz)
+-- gets vap.band_steer, stamped by apply_config; Roaming Assistant's stamp is
+-- the threshold it always had.
+--
+-- conf.lua `use_usteer = true` gives both to usteer and roamassist.lua, for a
+-- site of OpenWrt APs only, or with clients that have no 802.11k.
+--
+-- `controller_steering = false`: this AP ignores both. No stamp at all; the
+-- 802.11k/v that steering forces on are apply_config's and stay as pushed.
 -- _steering_why keeps what the controller asked, which the portal shows.
 function M._local_steering_gate(vap_table, cfg, steering_active, roam_assist_active)
-	if not (cfg and cfg.config and cfg.config.controller_steering == false) then
-		return steering_active, roam_assist_active
+	local c = cfg and cfg.config or {}
+	if c.controller_steering == false then
+		for _, vap in ipairs(vap_table or {}) do vap.roam_assist_enabled = false end
+		return false, false
 	end
-	for _, vap in ipairs(vap_table or {}) do vap.roam_assist_enabled = false end
+	if c.use_usteer == true then return steering_active, roam_assist_active end
+	local device = M._steering_why and M._steering_why.band_device
+	for _, vap in ipairs(vap_table or {}) do
+		vap.band_steer = (vap.no2ghz_oui or device ~= nil) and true or nil
+	end
 	return false, false
 end
 
@@ -4459,7 +4491,7 @@ end
 --   country_override     rf_config writes it over the pushed country: removed in
 --                        the page, the radios kept it until the next push
 M.PUSH_OPTIONS = {
-	{"controller_steering", true}, {"uplink_radio_aps", true}, {"unifi_sibling_ie", true},
+	{"controller_steering", true}, {"use_usteer", false}, {"uplink_radio_aps", true}, {"unifi_sibling_ie", true},
 	{"use_only_unifi_wlan", false}, {"device_login", false},
 }
 -- Options with a value rather than on/off. Fingerprinted only while set, so a
@@ -5250,13 +5282,12 @@ function M.handle_response(json_str, st, cfg)
 				if #radio_table > 0 or #vap_table > 0 then
 					local steering_active, roam_assist_active =
 						M._steering_flags(vap_table, sys_raw)
-					-- controller_steering = false stops usteer here and nothing
-					-- else: apply_config still gets the controller's flags, so
-					-- the 802.11k/v they force on stay on.
+					-- usteer runs only with use_usteer. Either way apply_config
+					-- gets the controller's flags, so the 802.11k/v they force
+					-- on stay on.
 					local run_bs, run_ra = M._local_steering_gate(vap_table, cfg,
 						steering_active, roam_assist_active)
 					M._usteer.set_enabled(run_bs, cfg, run_ra)
-					M._usteer_steering = (run_bs or run_ra) and true or false
 					M._usteer_filter_next = 0   -- re-check the sync filter next tick
 					if M._backhaul and M._backhaul.pin_parent_channel then
 						pcall(M._backhaul.pin_parent_channel, radio_table, st, ufuci)
@@ -8398,11 +8429,12 @@ function M._rrm_tick(cfg, st)
 	-- upgrades, so every device installed before this option existed has no
 	-- such key -- AP2 was exactly that, and the collector never started.
 	local rrm_on   = cfg.config.rrm_enrichment ~= false
-	-- Client steering (clientmatch.lua) reads the same beacon reports, so the
+	-- Client steering (clientmatch.lua, for client_steering or the controller's
+	-- Band Steering and Roaming Assistant) reads the same beacon reports, so the
 	-- collector and the harvest run for it too; the periodic requests below
 	-- stay rrm_enrichment's.
 	local enrich_on = rrm_on
-	rrm_on = rrm_on or cfg.config.client_steering == true
+	rrm_on = rrm_on or cfg.config.client_steering == true or M._clientmatch_wanted == true
 	local assoc_on = M._assoc_enabled(st, cfg)
 	M._roam_fast, M._roam_st = assoc_on and rrm.drain ~= nil, st
 	M._roam_keep = rrm_on and true or false
