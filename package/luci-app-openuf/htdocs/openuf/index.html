@@ -7,7 +7,12 @@
 	<meta name="darkreader-lock">
 	<title>Access Point</title>
 	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23006fff'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='white' stroke-width='2.5'/%3E%3C/svg%3E">
-	<link rel="stylesheet" href="portal.css">
+	<!-- portal.css and portal.js are named with a fresh query on every load:
+	     uhttpd serves them with no Cache-Control, and Chrome on Android kept
+	     the previous deploy's portal.js through reloads, so a new setting
+	     never appeared. Both are small and served on the LAN. -->
+	<script>document.write('<link rel="stylesheet" href="portal.css?t=' + Date.now() + '">');</script>
+	<noscript><link rel="stylesheet" href="portal.css"></noscript>
 </head>
 <body>
 	<div class="app" id="app">
@@ -71,6 +76,6 @@
 		<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" id="dialog"></div>
 	</div>
 
-	<script src="portal.js"></script>
+	<script>document.write('<script src="portal.js?t=' + Date.now() + '"><\/script>');</script>
 </body>
 </html>
