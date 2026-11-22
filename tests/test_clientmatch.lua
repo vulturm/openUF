@@ -139,4 +139,68 @@ return {
 			assert_eq(cm.pick({op_class = 81}, heard, list, OWN, now).bssid, S5, "and 5 GHz is a target")
 		end
 	},
+	{
+		name = "clientmatch: a good 2.4 GHz client is asked about 5 GHz and moved up at UP_FLOOR",
+		fn = function()
+			local S5 = "a8:9c:6c:b8:ab:80"
+			local saved = NR
+			NR = {{S5, "AP-guest", "a89c6cb8ab80af180000797c09"}, {U7, "AP-guest", "b29c6cb8ab7faf080000510607"}}
+			local ok, err = pcall(with_ap, function(sent, logged)
+				local asked, reports = {}, {}
+				local opts = {reports = reports, capable = function() return {"a8:db:03:35:45:cc"} end,
+					request = function(_, _, o) asked[#asked + 1] = o.op_class .. "/" .. o.channel end}
+				local M = "a8:db:03:35:45:cc"
+				assert_eq(cm.tick(obs(-55, 10), 1000, opts), 0, "a fresh join settles first")
+				assert_eq(#asked, 0, "not asked")
+				cm.tick(obs(-55), 1100, opts)
+				assert_eq(table.concat(asked, " "), "121/124", "only the higher band's channel")
+				reports[M] = {[S5] = {signal = -66, seen_at = 1105}}
+				assert_eq(cm.tick(obs(-55), 1110, opts), 0, "-66 is under UP_FLOOR")
+				assert_eq(#asked, 1, "and no new round before UP_GAP")
+				reports[M] = {[S5] = {signal = -64, seen_at = 1115}}
+				assert_eq(cm.tick(obs(-55), 1120, opts), 1, "-64: moved up, with no DIFF_DB")
+				assert_contains(sent[1], "a89c6cb8ab80af180000797c09", "naming the 5 GHz BSS")
+				assert_contains(sent[1], '"disassociation_imminent":false', "a request, not a kick")
+				assert_contains(logged[1], "on 2.4 GHz", "and logged")
+				assert_eq(cm.tick(obs(-55), 1130, opts), 0, "COOLDOWN holds")
+			end)
+			NR = saved
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "clientmatch: a 2.4 GHz-only device is asked ever more rarely, a 5 GHz client not at all",
+		fn = function()
+			local S5 = "a8:9c:6c:b8:ab:80"
+			local saved = NR
+			NR = {{S5, "AP-guest", "a89c6cb8ab80af180000797c09"}}
+			local ok, err = pcall(with_ap, function(sent)
+				local asked = 0
+				local opts = {reports = {}, capable = function() return {"a8:db:03:35:45:cc"} end,
+					request = function() asked = asked + 1 end}
+				local t = 1000
+				cm.tick(obs(-55), t, opts)
+				assert_eq(asked, 1, "first round")
+				cm.tick(obs(-55), t + cm.UP_GAP - 1, opts)
+				assert_eq(asked, 1, "not before UP_GAP")
+				t = t + cm.UP_GAP
+				cm.tick(obs(-55), t, opts)
+				assert_eq(asked, 2, "second round")
+				cm.tick(obs(-55), t + cm.UP_GAP, opts)
+				assert_eq(asked, 2, "the gap has doubled")
+				cm.tick(obs(-55), t + 2 * cm.UP_GAP, opts)
+				assert_eq(asked, 3, "third round")
+				assert_eq(cm._state["a8:db:03:35:45:cc"].up_gap, 4 * cm.UP_GAP, "doubling")
+				assert_eq(#sent, 0, "nothing heard, nothing sent")
+				cm._state, asked = {}, 0
+				local five = obs(-55); five[1].op_class, five[1].channel = 115, 36
+				cm.tick(five, 5000, opts)
+				assert_eq(asked, 0, "a client already on 5 GHz gets no such round")
+				local list = {{U7, "x", "b29c6cb8ab7faf080000510607"}}
+				assert_nil(cm.pick_up({op_class = 115}, {[U7] = {signal = -40, seen_at = 1}}, list, OWN, 1), "never down")
+			end)
+			NR = saved
+			if not ok then error(err, 0) end
+		end
+	},
 }

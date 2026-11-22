@@ -278,7 +278,9 @@ config = {
 	-- clearly better (Aruba's ClientMatch, with 802.11k and 802.11v): one
 	-- under -70 dBm for 20 s is asked for a beacon report, and when it hears
 	-- a BSS of this one's 802.11k neighbour list 8 dB louder it gets a BSS
-	-- Transition request naming it -- a request, never a disconnect. Only
+	-- Transition request naming it -- a request, never a disconnect. A client
+	-- on 2.4 GHz that hears a listed 5/6 GHz BSS at -65 dBm or better gets the
+	-- same request whatever its signal here; none is sent to a lower band. Only
 	-- WLANs without the controller's Roaming Assistant, and only clients that
 	-- can make a beacon report. Off by default.
 	client_steering = false,

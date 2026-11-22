@@ -28,6 +28,14 @@
 	     imminent", and nothing follows it: a client that stays, stays. This
 	     only tells a client what it could not see for itself.
 
+	A client on 2.4 GHz with a good signal is never under FLOOR, and a phone
+	that joined there can stay for hours next to a clear 5 GHz cell. So one on
+	2.4 GHz is also asked about the higher bands' channels of the list, and a
+	BSS it hears at UP_FLOOR or better gets the same request. 5 GHz reads
+	weaker than 2.4 from the same spot, so this has no DIFF_DB. A 2.4 GHz-only
+	device answers such a request with nothing: its rounds back off, from
+	UP_GAP doubling up to UP_GAP_MAX.
+
 	A WLAN under the controller's Roaming Assistant is roamassist.lua's, and
 	while usteer steers (Band Steering) nothing is steered here at all
 	(inform.lua builds the observations): a client is never pushed by two
@@ -57,9 +65,13 @@ M.REPORT_MAX_AGE = 120    -- s a report is trusted for: a round of MAX_CHANNELS 
 M.MAX_CHANNELS   = 5      -- channels measured in one round, the client's own included
 M.FORGET         = 600    -- s unseen before a client's state is dropped
 M.VALIDITY       = 100    -- beacon intervals the request holds
+M.UP_FLOOR       = -65    -- dBm: a higher band heard this well is worth moving to
+M.UP_GAP         = 900    -- s between rounds about the higher bands, doubling
+M.UP_GAP_MAX     = 21600  -- s: where that doubling stops
 
--- [mac] = {below_since, asked_at, asking, acted_at, seen_at}; asking: the
--- round's channels still to request.
+-- [mac] = {below_since, asked_at, asking, round, up_at, up_gap, acted_at,
+-- seen_at}; asking: the round's channels still to request; round: "weak" or
+-- "up", which of the two rounds they belong to.
 M._state = {}
 
 local function is_ifname(s) return type(s) == "string" and s:match("^[%w%-%._]+$") ~= nil end
@@ -99,16 +111,18 @@ end
 -- The round of beacon requests for one client: its own channel first, then
 -- each distinct channel of a neighbour it could be steered to. Empty with no
 -- such neighbour: nothing to compare, so no client is sent off-channel.
-function M.channels_to_ask(o, nr, own)
+-- higher_only: the higher bands' channels alone, for pick_up.
+function M.channels_to_ask(o, nr, own, higher_only)
 	local rank, ch = band_rank(o.op_class), tonumber(o.channel)
 	if not (rank and ch) then return {} end
 	local out, seen = {{op_class = o.op_class, channel = ch}}, {[o.op_class .. "/" .. ch] = true}
+	if higher_only then out = {} end
 	local any = false
 	for _, e in ipairs(type(nr) == "table" and nr or {}) do
 		local b = type(e) == "table" and e[1]
 		local op, c = nr_channel(type(e) == "table" and e[3])
 		local r = band_rank(op)
-		if is_mac(b) and b:lower() ~= own and c and r and r >= rank then
+		if is_mac(b) and b:lower() ~= own and c and r and (r > rank or (r == rank and not higher_only)) then
 			any = true
 			local key = op .. "/" .. c
 			if not seen[key] and #out < M.MAX_CHANNELS then
@@ -144,6 +158,24 @@ function M.pick(obs, heard, nr, own, now, diff_db, floor)
 				and h.signal >= floor and h.signal >= here + diff_db
 				and (not best_sig or h.signal > best_sig) then
 			best, best_sig = {bssid = b:lower(), nr = hex, signal = h.signal, here = here}, h.signal
+		end
+	end
+	return best
+end
+
+-- The loudest listed BSS of a higher band that a 2.4 GHz client hears at
+-- UP_FLOOR or better, or nil.
+function M.pick_up(obs, heard, nr, own, now)
+	if band_rank(obs.op_class) ~= 1 then return nil end
+	local best, best_sig
+	for _, e in ipairs(type(nr) == "table" and nr or {}) do
+		local b, hex = type(e) == "table" and e[1], type(e) == "table" and e[3]
+		local h = is_mac(b) and heard[b:lower()]
+		local there = band_rank((nr_channel(hex)))
+		if h and b:lower() ~= own and there and there > 1
+				and now - h.seen_at <= M.REPORT_MAX_AGE and h.signal >= M.UP_FLOOR
+				and (not best_sig or h.signal > best_sig) then
+			best, best_sig = {bssid = b:lower(), nr = hex, signal = h.signal}, h.signal
 		end
 	end
 	return best
@@ -204,6 +236,29 @@ function M.tick(observations, now, opts)
 		end
 		return capable_cache[ifn][mac] or false
 	end
+	local function own_of(ifn)
+		if own_cache[ifn] == nil then own_cache[ifn] = own_bssid(ifn) or false end
+		return own_cache[ifn] or nil
+	end
+	local function steer(o, mac, cs, best, what)
+		if opts.on_steer then pcall(opts.on_steer, mac) end
+		M._exec(string.format(
+			"ubus call hostapd.%s bss_transition_request " ..
+			"'{\"addr\":\"%s\",\"disassociation_imminent\":false,\"abridged\":true," ..
+			"\"validity_period\":%d,\"dialog_token\":1,\"neighbors\":[\"%s\"]}' >/dev/null 2>&1",
+			o.ifname, mac, M.VALIDITY, best.nr))
+		cs.acted_at, cs.asking, cs.round = now, nil, nil
+		sent = sent + 1
+		M._log(("%s on %s hears %s at %d dBm, %s: asked to move there")
+			:format(mac, o.ifname, best.bssid, best.signal, what))
+	end
+	-- One per heartbeat: a client measures one request at a time, and each
+	-- takes it off its channel.
+	local function next_request(o, mac, cs)
+		if not cs.asking then return end
+		pcall(opts.request, o.ifname, mac, table.remove(cs.asking, 1))
+		if #cs.asking == 0 then cs.asking = nil end
+	end
 	for _, o in ipairs(observations or {}) do
 		local mac = is_mac(o.mac) and o.mac:lower()
 		local signal = tonumber(o.signal)
@@ -211,44 +266,52 @@ function M.tick(observations, now, opts)
 			local cs = M._state[mac] or {}
 			M._state[mac] = cs
 			cs.seen_at = now
+			local settled = (tonumber(o.connected_sec) or 0) >= M.MIN_CONNECTED
+				and (not cs.acted_at or now - cs.acted_at >= M.COOLDOWN)
 			if signal >= M.FLOOR then
-				cs.below_since, cs.asking = nil, nil
+				cs.below_since = nil
+				if cs.round == "weak" then cs.asking, cs.round = nil, nil end
+				-- The time gates first: this runs for every 2.4 GHz client on
+				-- every heartbeat, and btm_of is a ubus call.
+				local due = not cs.up_at or now - cs.up_at >= (cs.up_gap or M.UP_GAP)
+				local answering = cs.up_at and now - cs.up_at <= M.REPORT_MAX_AGE
+				if band_rank(o.op_class) == 1 and settled and (cs.asking or due or answering)
+						and btm_of(o.ifname, mac) then
+					local own = own_of(o.ifname)
+					local best = not cs.asking
+						and M.pick_up(o, reports[mac] or {}, nr_of(o.ifname), own, now)
+					if best then
+						steer(o, mac, cs, best, ("here at %d, on 2.4 GHz"):format(signal))
+					else
+						if not cs.asking and due and opts.request and capable(o.ifname, mac) then
+							local round = M.channels_to_ask(o, nr_of(o.ifname), own, true)
+							if #round > 0 then
+								cs.up_at, cs.asking, cs.round = now, round, "up"
+								cs.up_gap = math.min((cs.up_gap or M.UP_GAP / 2) * 2, M.UP_GAP_MAX)
+							end
+						end
+						next_request(o, mac, cs)
+					end
+				end
 			else
+				if cs.round == "up" then cs.asking, cs.round = nil, nil end
 				cs.below_since = cs.below_since or now
-				local ready = now - cs.below_since >= M.HOLD
-					and (tonumber(o.connected_sec) or 0) >= M.MIN_CONNECTED
-					and (not cs.acted_at or now - cs.acted_at >= M.COOLDOWN)
-					and btm_of(o.ifname, mac)
+				local ready = now - cs.below_since >= M.HOLD and settled and btm_of(o.ifname, mac)
 				if ready then
-					own_cache[o.ifname] = own_cache[o.ifname] or own_bssid(o.ifname) or false
-					local own = own_cache[o.ifname] or nil
+					local own = own_of(o.ifname)
 					-- Not in the middle of a round: the first channel to answer
 					-- is not yet the best one.
 					local best = not cs.asking
 						and M.pick(o, reports[mac] or {}, nr_of(o.ifname), own, now, opts.diff_db)
 					if best then
-						if opts.on_steer then pcall(opts.on_steer, mac) end
-						M._exec(string.format(
-							"ubus call hostapd.%s bss_transition_request " ..
-							"'{\"addr\":\"%s\",\"disassociation_imminent\":false,\"abridged\":true," ..
-							"\"validity_period\":%d,\"dialog_token\":1,\"neighbors\":[\"%s\"]}' >/dev/null 2>&1",
-							o.ifname, mac, M.VALIDITY, best.nr))
-						cs.acted_at = now
-						sent = sent + 1
-						M._log(("%s on %s hears %s at %d dBm, here at %d: asked to move there")
-							:format(mac, o.ifname, best.bssid, best.signal, best.here))
+						steer(o, mac, cs, best, ("here at %d"):format(best.here))
 					else
 						if not cs.asking and (not cs.asked_at or now - cs.asked_at >= M.REQUEST_GAP)
 								and opts.request and capable(o.ifname, mac) then
 							local round = M.channels_to_ask(o, nr_of(o.ifname), own)
-							if #round > 0 then cs.asked_at, cs.asking = now, round end
+							if #round > 0 then cs.asked_at, cs.asking, cs.round = now, round, "weak" end
 						end
-						-- One per heartbeat: a client measures one request at a
-						-- time, and each takes it off its channel.
-						if cs.asking then
-							pcall(opts.request, o.ifname, mac, table.remove(cs.asking, 1))
-							if #cs.asking == 0 then cs.asking = nil end
-						end
+						next_request(o, mac, cs)
 					end
 				end
 			end
