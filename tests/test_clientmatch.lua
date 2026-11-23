@@ -233,4 +233,53 @@ return {
 			end)
 		end
 	},
+	{
+		name = "clientmatch: a 2.4 GHz client with nothing to ask costs no ubus call until UP_GAP",
+		fn = function()
+			with_ap(function()
+				local calls, o_popen = 0, cm._popen
+				cm._popen = function(c) calls = calls + 1; return o_popen(c) end
+				local opts = {reports = {}, capable = function() return {} end, request = function() end}
+				cm.tick(obs(-55), 1000, opts)
+				local first = calls
+				assert_true(first > 0, "checked once")
+				cm.tick(obs(-55), 1020, opts); cm.tick(obs(-55), 1040, opts)
+				assert_eq(calls, first, "not on the next heartbeats")
+				cm.tick(obs(-55), 1000 + cm.UP_GAP, opts)
+				assert_true(calls > first, "again after UP_GAP")
+				cm._popen = o_popen
+			end)
+		end
+	},
+	{
+		name = "clientmatch: a capable client finds a list written after a restart, and a late round is still judged",
+		fn = function()
+			local S5 = "a8:9c:6c:b8:ab:80"
+			local M = "a8:db:03:35:45:cc"
+			local saved = NR
+			NR = {}
+			local ok, err = pcall(with_ap, function(sent)
+				local asked, reports = 0, {}
+				local opts = {reports = reports, capable = function() return {M} end,
+					request = function() asked = asked + 1 end}
+				cm.tick(obs(-55), 1000, opts)
+				assert_eq(asked, 0, "the list is still empty")
+				NR = {{S5, "AP-guest", "a89c6cb8ab80af180000797c09"},
+					{"a8:9c:6c:b8:ab:81", "AP-guest", "a89c6cb8ab81af180000732409"},
+					{"a8:9c:6c:b8:ab:82", "AP-guest", "a89c6cb8ab82af180000762809"}}
+				cm.tick(obs(-55), 1000 + cm.UP_RETRY - 1, opts)
+				assert_eq(asked, 0, "not before UP_RETRY")
+				local t = 1000 + cm.UP_RETRY
+				cm.tick(obs(-55), t, opts)
+				assert_eq(asked, 1, "the round starts a minute later, not after UP_GAP")
+				cm.tick(obs(-55), t + 70, opts); cm.tick(obs(-55), t + 140, opts)
+				assert_eq(asked, 3, "a slow heartbeat: its last request is 140 s in")
+				reports[M] = {[S5] = {signal = -60, seen_at = t + 145}}
+				assert_eq(cm.tick(obs(-55), t + 210, opts), 1, "still judged, from the last request")
+				assert_eq(#sent, 1, "one request to move")
+			end)
+			NR = saved
+			if not ok then error(err, 0) end
+		end
+	},
 }

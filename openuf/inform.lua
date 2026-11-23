@@ -858,6 +858,23 @@ function M._sta_vlan(dev)
 	return tonumber(br:match("^br%-openuf(%d+)$")) or 1
 end
 
+-- Whether openUF runs usteerd now, from usteer's own stamp: it survives a
+-- daemon restart with no push.
+function M._usteer_runs()
+	local u = M._usteer
+	return (u and u.filter_wanted and u.filter_wanted() == true) or false
+end
+
+-- What clientmatch.lua does for one WLAN's clients, nil for nothing: the
+-- weak-client move for Roaming Assistant, at its threshold, and the move up
+-- from 2.4 GHz for Band Steering; both for conf.lua client_steering.
+function M._vap_steering(vap, steer_all)
+	local weak = steer_all or vap.roam_assist_rssi ~= nil
+	local up = steer_all or vap.band_steer == true
+	if not (weak or up) then return nil end
+	return {floor = vap.roam_assist_rssi, weak = weak, up = up}
+end
+
 -- `chwidth` as a U7 sends it for a client, which the controller shows as
 -- channel_width: 0 = 20 MHz, 2 = 80, 3 = 160 read off mca-dump against
 -- stat/sta; 1 = 40 by the same sequence. A width with no code is not sent.
@@ -1495,10 +1512,7 @@ function M.build_json(st, cfg, ufhw)
 		-- is conf.lua client_steering. Never while usteer runs: two steerers
 		-- that disagree push a client back and forth between the bands. Asked
 		-- of usteer's own stamp, which survives a daemon restart with no push.
-		local ok_ur, usteer_runs = pcall(function()
-			return M._usteer and M._usteer.filter_wanted and M._usteer.filter_wanted()
-		end)
-		usteer_runs = ok_ur and usteer_runs == true
+		local usteer_runs = M._usteer_runs()
 		local steer_all = cfg and cfg.config and cfg.config.client_steering == true
 		local steer_obs = {}
 		local steer_wanted = false
@@ -1639,6 +1653,11 @@ function M.build_json(st, cfg, ufhw)
 				end
 			end
 			local is_backhaul_vap = (vap.usage == "uplink" or vap.usage == "downlink")
+			-- What clientmatch.lua does for this WLAN's clients, nil for nothing.
+			local steering = not is_backhaul_vap and not usteer_runs
+				and M._vap_steering(vap, steer_all) or nil
+			if steering then steer_wanted = true end
+			local vlan_by_dev = {}
 			-- The netdevs whose ARP staip.lua learns client addresses from.
 			if not is_backhaul_vap then
 				for _, dev in ipairs(ok_if and ifnames or {}) do staip_devs[dev] = true end
@@ -1738,8 +1757,7 @@ function M.build_json(st, cfg, ufhw)
 						signal = sta.signal, connected_sec = sta.connected_sec,
 						threshold = vap.roam_assist_rssi,
 					}
-				elseif not usteer_runs and (steer_all or vap.roam_assist_rssi or vap.band_steer)
-						and not below_minrssi and sta.signal then
+				elseif steering and not below_minrssi and sta.signal then
 					-- The client's own channel and operating class, the first
 					-- of its round of beacon requests (clientmatch.channels_to_ask).
 					steer_obs[#steer_obs + 1] = {
@@ -1747,11 +1765,7 @@ function M.build_json(st, cfg, ufhw)
 						signal = sta.signal, connected_sec = sta.connected_sec,
 						channel = vap.channel,
 						op_class = M._clientmatch and M._clientmatch.op_class(vap.channel, vap.radio),
-						-- Roaming Assistant's threshold is the controller's, per
-						-- WLAN; Band Steering is the move up from 2.4 GHz.
-						floor = vap.roam_assist_rssi,
-						weak = (steer_all or vap.roam_assist_rssi ~= nil) and true or false,
-						up = (steer_all or vap.band_steer) and true or false,
+						floor = steering.floor, weak = steering.weak, up = steering.up,
 					}
 				end
 				local prev = M._sta_stats_cache[sta.mac]
@@ -1811,6 +1825,10 @@ function M.build_json(st, cfg, ufhw)
 				local sta_state
 				if ps_ok and ps ~= nil then sta_state = ps and 0x10 or 0 end
 
+				local client_dev = not is_backhaul_vap and sta_dev[sta_i]
+				if client_dev and vlan_by_dev[client_dev] == nil then
+					vlan_by_dev[client_dev] = M._sta_vlan(client_dev) or false
+				end
 				sta_table[#sta_table + 1] = {
 					-- On an uplink VAP the one "station" is the parent's downlink
 					-- BSS; serialno names the parent device, which is how the
@@ -1819,7 +1837,7 @@ function M.build_json(st, cfg, ufhw)
 					-- As a U7's mca-dump has them: `ip`, and `vlan_id` 1 on the
 					-- native network. Clients only; nil when not known.
 					ip      = not is_backhaul_vap and M._sta_ip(sta.mac) or nil,
-					vlan_id = not is_backhaul_vap and M._sta_vlan(sta_dev[sta_i]) or nil,
+					vlan_id = client_dev and vlan_by_dev[client_dev] or nil,
 					chwidth = not is_backhaul_vap and M.CHWIDTH[sta_width] or nil,
 					active     = true,
 					mac        = sta.mac,
@@ -2009,10 +2027,6 @@ function M.build_json(st, cfg, ufhw)
 				vap.cu_self_rx = cu.cu_self_rx
 				vap.cu_self_tx = cu.cu_self_tx
 				vap.cu_interf  = cu.cu_interf
-			end
-			if not is_backhaul_vap and not usteer_runs
-					and (steer_all or vap.roam_assist_rssi or vap.band_steer) then
-				steer_wanted = true
 			end
 			vap.roam_assist_rssi = nil  -- internal, consumed above
 			vap.band_steer = nil
@@ -7209,10 +7223,7 @@ function M._nrlist_tick(st, cfg)
 	if now < M._nrlist_next then return 0 end
 	M._nrlist_next = now + M.NRLIST_INTERVAL
 	-- usteer owns the list where openUF runs it (nrlist.lua's header).
-	if M._usteer and M._usteer.filter_wanted then
-		local ok_u, runs = pcall(M._usteer.filter_wanted)
-		if ok_u and runs then return 0 end
-	end
+	if M._usteer_runs() then return 0 end
 	M._nrlist.expire(now)
 	local ufuci = M._ucihelper
 	local ok_v, vaps = pcall(ufuci.get_vap_table)

@@ -72,10 +72,12 @@ M.VALIDITY       = 100    -- beacon intervals the request holds
 M.UP_FLOOR       = -65    -- dBm: a higher band heard this well is worth moving to
 M.UP_GAP         = 900    -- s between rounds about the higher bands, doubling
 M.UP_GAP_MAX     = 21600  -- s: where that doubling stops
+M.UP_RETRY       = 60     -- s: soon again when the list may just not be written yet
+M.UP_TRIES       = 3      -- such retries before UP_GAP applies
 
--- [mac] = {below_since, asked_at, asking, round, up_at, up_gap, acted_at,
--- seen_at}; asking: the round's channels still to request; round: "weak" or
--- "up", which of the two rounds they belong to.
+-- [mac] = {below_since, asked_at, asking, up_at, up_gap, up_last, up_tries,
+-- acted_at, seen_at}; up_last: the last request of an "up" round;
+-- asking: the round's channels still to request, its .kind "weak" or "up".
 M._state = {}
 
 local function is_ifname(s) return type(s) == "string" and s:match("^[%w%-%._]+$") ~= nil end
@@ -138,8 +140,24 @@ function M.channels_to_ask(o, nr, own, higher_only)
 	return any and out or {}
 end
 
--- The best neighbour for one client, or nil. heard: {[bssid] = {signal,
--- seen_at}} from its report; nr: this BSS's rrm_nr_list entries.
+-- The loudest fresh BSS of this BSS's rrm_nr_list that accepts(band rank,
+-- signal) allows, or nil. heard: {[bssid] = {signal, seen_at}} from the
+-- client's report.
+local function best_listed(heard, nr, own, now, accepts)
+	local best
+	for _, e in ipairs(type(nr) == "table" and nr or {}) do
+		local b, hex = type(e) == "table" and e[1], type(e) == "table" and e[3]
+		local h = is_mac(b) and heard[b:lower()]
+		local there = band_rank((nr_channel(hex)))
+		if h and b:lower() ~= own and there and now - h.seen_at <= M.REPORT_MAX_AGE
+				and accepts(there, h.signal) and (not best or h.signal > best.signal) then
+			best = {bssid = b:lower(), nr = hex, signal = h.signal}
+		end
+	end
+	return best
+end
+
+-- The best neighbour for a weak client, or nil.
 function M.pick(obs, heard, nr, own, now, diff_db, floor)
 	diff_db, floor = diff_db or M.DIFF_DB, floor or M.FLOOR
 	-- The client's own reading of this BSS, from the same report: the same
@@ -149,21 +167,12 @@ function M.pick(obs, heard, nr, own, now, diff_db, floor)
 	-- "better" against it.
 	local mine = own and heard[own]
 	if not (mine and now - mine.seen_at <= M.REPORT_MAX_AGE) then return nil end
-	local here = mine.signal
-	local rank = band_rank(obs.op_class)
+	local here, rank = mine.signal, band_rank(obs.op_class)
 	if not rank then return nil end
-	local best, best_sig
-	for _, e in ipairs(type(nr) == "table" and nr or {}) do
-		local b, hex = type(e) == "table" and e[1], type(e) == "table" and e[3]
-		local h = is_mac(b) and heard[b:lower()]
-		local there = band_rank((nr_channel(hex)))
-		if h and b:lower() ~= own and there and there >= rank
-				and now - h.seen_at <= M.REPORT_MAX_AGE
-				and h.signal >= floor and h.signal >= here + diff_db
-				and (not best_sig or h.signal > best_sig) then
-			best, best_sig = {bssid = b:lower(), nr = hex, signal = h.signal, here = here}, h.signal
-		end
-	end
+	local best = best_listed(heard, nr, own, now, function(there, signal)
+		return there >= rank and signal >= floor and signal >= here + diff_db
+	end)
+	if best then best.here = here end
 	return best
 end
 
@@ -171,18 +180,9 @@ end
 -- UP_FLOOR or better, or nil.
 function M.pick_up(obs, heard, nr, own, now)
 	if band_rank(obs.op_class) ~= 1 then return nil end
-	local best, best_sig
-	for _, e in ipairs(type(nr) == "table" and nr or {}) do
-		local b, hex = type(e) == "table" and e[1], type(e) == "table" and e[3]
-		local h = is_mac(b) and heard[b:lower()]
-		local there = band_rank((nr_channel(hex)))
-		if h and b:lower() ~= own and there and there > 1
-				and now - h.seen_at <= M.REPORT_MAX_AGE and h.signal >= M.UP_FLOOR
-				and (not best_sig or h.signal > best_sig) then
-			best, best_sig = {bssid = b:lower(), nr = hex, signal = h.signal}, h.signal
-		end
-	end
-	return best
+	return best_listed(heard, nr, own, now, function(there, signal)
+		return there > 1 and signal >= M.UP_FLOOR
+	end)
 end
 
 -- The 802.11 operating class of a channel's 20 MHz sub-band (Annex E,
@@ -253,17 +253,43 @@ function M.tick(observations, now, opts)
 			"'{\"addr\":\"%s\",\"disassociation_imminent\":false,\"abridged\":true," ..
 			"\"validity_period\":%d,\"dialog_token\":1,\"neighbors\":[\"%s\"]}' >/dev/null 2>&1",
 			o.ifname, mac, M.VALIDITY, best.nr))
-		cs.acted_at, cs.asking, cs.round = now, nil, nil
+		cs.acted_at, cs.asking = now, nil
 		sent = sent + 1
 		M._log(("%s on %s hears %s at %d dBm, %s: asked to move there")
 			:format(mac, o.ifname, best.bssid, best.signal, what))
 	end
-	-- One per heartbeat: a client measures one request at a time, and each
-	-- takes it off its channel.
-	local function next_request(o, mac, cs)
-		if not cs.asking then return end
-		pcall(opts.request, o.ifname, mac, table.remove(cs.asking, 1))
-		if #cs.asking == 0 then cs.asking = nil end
+	-- One step of either move: mid-round, the next request (the first channel
+	-- to answer is not yet the best one); else steer on the report, or start a
+	-- round when one is due. One request per heartbeat: a client measures one
+	-- at a time, and each takes it off its channel.
+	local function advance(o, mac, cs, kind, due, signal, floor)
+		local own = own_of(o.ifname)
+		local heard = not cs.asking and reports[mac]
+		local best = heard and (kind == "up"
+			and M.pick_up(o, heard, nr_of(o.ifname), own, now)
+			or kind == "weak" and M.pick(o, heard, nr_of(o.ifname), own, now, opts.diff_db, floor))
+		if best then
+			steer(o, mac, cs, best, kind == "up" and ("here at %d, on 2.4 GHz"):format(signal)
+				or ("here at %d"):format(best.here))
+			return
+		end
+		if not cs.asking and due and opts.request and capable(o.ifname, mac) then
+			local round = M.channels_to_ask(o, nr_of(o.ifname), own, kind == "up")
+			if #round > 0 then
+				round.kind, cs.asking = kind, round
+				if kind == "up" then
+					cs.up_at, cs.up_tries = now, nil
+					cs.up_gap = math.min((cs.up_gap or M.UP_GAP / 2) * 2, M.UP_GAP_MAX)
+				else
+					cs.asked_at = now
+				end
+			end
+		end
+		if cs.asking then
+			pcall(opts.request, o.ifname, mac, table.remove(cs.asking, 1))
+			if kind == "up" then cs.up_last = now end
+			if #cs.asking == 0 then cs.asking = nil end
+		end
 	end
 	for _, o in ipairs(observations or {}) do
 		local mac = is_mac(o.mac) and o.mac:lower()
@@ -277,50 +303,34 @@ function M.tick(observations, now, opts)
 			local floor = tonumber(o.floor) or M.FLOOR
 			if signal >= floor or o.weak == false then
 				cs.below_since = nil
-				if cs.round == "weak" then cs.asking, cs.round = nil, nil end
+				if cs.asking and cs.asking.kind == "weak" then cs.asking = nil end
 				-- The time gates first: this runs for every 2.4 GHz client on
-				-- every heartbeat, and btm_of is a ubus call.
-				local due = not cs.up_at or now - cs.up_at >= (cs.up_gap or M.UP_GAP)
-				local answering = cs.up_at and now - cs.up_at <= M.REPORT_MAX_AGE
+				-- every heartbeat, and each check below is a ubus call. A due
+				-- check that found nothing to ask counts too, or a client with
+				-- no 802.11k would repeat it every heartbeat. A capable client
+				-- with no higher band listed is retried soon a few times: the
+				-- list is written some seconds after a restart.
+				local retrying = cs.up_tries and cs.up_tries <= M.UP_TRIES
+				local wait = retrying and M.UP_RETRY or cs.up_gap or M.UP_GAP
+				local due = not cs.up_at or now - cs.up_at >= wait
+				-- From the round's last request: its answers come after it.
+				local answering = reports[mac] and cs.up_last and now - cs.up_last <= M.REPORT_MAX_AGE
 				if o.up ~= false and band_rank(o.op_class) == 1 and settled
-						and (cs.asking or due or answering)
-						and btm_of(o.ifname, mac) then
-					local own = own_of(o.ifname)
-					local best = not cs.asking
-						and M.pick_up(o, reports[mac] or {}, nr_of(o.ifname), own, now)
-					if best then
-						steer(o, mac, cs, best, ("here at %d, on 2.4 GHz"):format(signal))
-					else
-						if not cs.asking and due and opts.request and capable(o.ifname, mac) then
-							local round = M.channels_to_ask(o, nr_of(o.ifname), own, true)
-							if #round > 0 then
-								cs.up_at, cs.asking, cs.round = now, round, "up"
-								cs.up_gap = math.min((cs.up_gap or M.UP_GAP / 2) * 2, M.UP_GAP_MAX)
-							end
-						end
-						next_request(o, mac, cs)
+						and (cs.asking or due or answering) then
+					local btm = btm_of(o.ifname, mac)
+					if btm then advance(o, mac, cs, "up", due, signal) end
+					if due and cs.up_at ~= now then
+						cs.up_at = now
+						cs.up_tries = (btm and opts.request and capable(o.ifname, mac))
+							and (cs.up_tries or 0) + 1 or nil
 					end
 				end
 			else
-				if cs.round == "up" then cs.asking, cs.round = nil, nil end
+				if cs.asking and cs.asking.kind == "up" then cs.asking = nil end
 				cs.below_since = cs.below_since or now
-				local ready = now - cs.below_since >= M.HOLD and settled and btm_of(o.ifname, mac)
-				if ready then
-					local own = own_of(o.ifname)
-					-- Not in the middle of a round: the first channel to answer
-					-- is not yet the best one.
-					local best = not cs.asking
-						and M.pick(o, reports[mac] or {}, nr_of(o.ifname), own, now, opts.diff_db, floor)
-					if best then
-						steer(o, mac, cs, best, ("here at %d"):format(best.here))
-					else
-						if not cs.asking and (not cs.asked_at or now - cs.asked_at >= M.REQUEST_GAP)
-								and opts.request and capable(o.ifname, mac) then
-							local round = M.channels_to_ask(o, nr_of(o.ifname), own)
-							if #round > 0 then cs.asked_at, cs.asking, cs.round = now, round, "weak" end
-						end
-						next_request(o, mac, cs)
-					end
+				if now - cs.below_since >= M.HOLD and settled and btm_of(o.ifname, mac) then
+					local due = not cs.asked_at or now - cs.asked_at >= M.REQUEST_GAP
+					advance(o, mac, cs, "weak", due, signal, floor)
 				end
 			end
 		end
