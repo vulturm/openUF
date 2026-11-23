@@ -91,12 +91,7 @@ end
 function M.save()
 	local ok, js = pcall(M._encode, M._seen)
 	if not ok or type(js) ~= "string" then return false end
-	local tmp = M.STORE .. ".tmp"
-	local f = io.open(tmp, "w")
-	if not f then return false end
-	f:write(js)
-	f:close()
-	return os.rename(tmp, M.STORE) and true or false
+	return util.write_atomic(M.STORE, js)
 end
 
 -- Read M.STORE back into M._seen, keeping only well-formed, unexpired

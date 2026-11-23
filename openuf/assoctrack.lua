@@ -181,19 +181,7 @@ function M.forget_shell(var)
 	return 'nft "' .. table.concat(parts, "; ") .. '" >/dev/null 2>&1'
 end
 
--- "1m58s694ms" -> 118.694. Units nft prints: d h m s ms.
-function M.parse_duration(s)
-	if type(s) ~= "string" or s == "" then return nil end
-	-- Summed in integer milliseconds and divided once, so "694ms" is exactly
-	-- the double 0.694 rather than 0.694 plus float noise.
-	local total, matched = 0, false
-	for n, unit in s:gmatch("(%d+)(%a+)") do
-		local k = ({d = 86400000, h = 3600000, m = 60000, s = 1000, ms = 1})[unit]
-		if not k then return nil end
-		total, matched = total + tonumber(n) * k, true
-	end
-	return matched and total / 1000 or nil
-end
+M.parse_duration = util.parse_duration
 
 -- Parse `nft list table` text into {set = {mac = {t = uptime, n = packets}}}.
 -- `now` is /proc/uptime at the moment of listing. Text, not -j: the JSON

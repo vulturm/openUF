@@ -79,14 +79,11 @@ end
 -- absolute steps (100 only past 400 Mbit/s, 90 under 200, on every band)
 -- had every 2.4 GHz client of an openUF AP at 85-90 for its rate while the
 -- U7s beside it scored theirs 100 at 6 Mbit/s.
-local PHY_LINES_5G = {      -- above 5000 MHz; 100 from 150000 kbps
-	{95, 100, 25000, 150000}, {90, 95, 15000, 25000},
-	{80, 90, 10000, 15000}, {60, 80, 1000, 10000},
-}
-local PHY_LINES_49G = {     -- 4800-5000 MHz; 100 from 30000 kbps
-	{95, 100, 25000, 30000}, {90, 95, 15000, 25000},
-	{80, 90, 10000, 15000}, {60, 80, 1000, 10000},
-}
+local function phy_lines(top)   -- top: the kbps that scores 100
+	return {{95, 100, 25000, top}, {90, 95, 15000, 25000},
+		{80, 90, 10000, 15000}, {60, 80, 1000, 10000}}
+end
+local PHY_LINES_5G, PHY_LINES_49G = phy_lines(150000), phy_lines(30000)   -- above 5000 MHz, 4800-5000
 
 -- tx_kbps/rx_kbps: the last rates in kbps (0 or nil when unknown); freq: the
 -- BSS's MHz (nil: not judged). The rate judged is their mean, as 4.0.15
@@ -101,9 +98,8 @@ function M.phy_score(tx_kbps, rx_kbps, freq)
 	elseif tx == 0 then r = rx
 	elseif rx == 0 then r = tx
 	else r = math.floor(tx / 2) + math.floor(rx / 2) end
-	local lines, top = PHY_LINES_5G, 150000
-	if freq <= 5000 then lines, top = PHY_LINES_49G, 30000 end
-	if r >= top then return 100, false end
+	local lines = freq <= 5000 and PHY_LINES_49G or PHY_LINES_5G
+	if r >= lines[1][4] then return 100, false end
 	for _, l in ipairs(lines) do
 		if r >= l[3] and r <= l[4] then
 			local f = (r - l[3]) / (l[4] - l[3])

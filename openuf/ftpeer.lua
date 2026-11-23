@@ -36,14 +36,7 @@ M.RRB     = "rrb-unifi"
 M.ENABLED = "/etc/openuf/plugins.enabled"
 
 M._read_file = util.read_file
-M._write_file = function(path, s)
-	local tmp = path .. ".tmp"
-	local f = io.open(tmp, "w")
-	if not f then return false end
-	f:write(s)
-	f:close()
-	return os.rename(tmp, path) and true or false
-end
+M._write_file = util.write_atomic
 M._load_cjson = function()
 	local ok, mod = pcall(require, "cjson")
 	return ok and mod or nil

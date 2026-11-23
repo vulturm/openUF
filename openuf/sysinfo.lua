@@ -366,8 +366,8 @@ end
 -- tx_retries/tx_failed: iw(8) only exposes TX-side retry/failure counters
 -- (802.11 ARQ is TX-side by nature) -- there is no rx-side equivalent in
 -- `station dump` output, confirmed via `strings /usr/sbin/iw`.
-function M.sta_table(ifname)
-	if not ifname then return {} end
+-- One dump per netdev per pass: the VAP loop and radio_sta_airtime both read it.
+local function read_sta_table(ifname)
 	local output = M._run_cmd("iw dev " .. ifname .. " station dump")
 	local clients = {}
 	local cur = nil
@@ -403,6 +403,11 @@ function M.sta_table(ifname)
 	end
 	if cur then clients[#clients + 1] = cur end
 	return clients
+end
+
+function M.sta_table(ifname)
+	if not ifname then return {} end
+	return pass_memo("sta:" .. ifname, function() return read_sta_table(ifname) end)
 end
 
 -- The receive airtime of a radio's own stations, for cu_self_rx: every
@@ -1499,18 +1504,10 @@ M.NFT_LEARN_TABLE = "bridge openuf_learn"
 -- prints. Every element carries the same timeout, so what is left is a direct
 -- proxy for how recently the tap last saw that host -- which is how a MAC that
 -- has held two addresses inside one timeout window resolves to the current one.
--- Note `ms` must be tested before `m`/`s`, or 980ms reads as 980 minutes.
 local function nft_expires_secs(rest)
 	local t = rest:match("expires%s+(%S+)")
 	if not t then return nil end
-	local secs = 0
-	for n, unit in t:gmatch("(%d+)(%a+)") do
-		local mult = (unit == "ms" and 0.001) or (unit == "s" and 1)
-			or (unit == "m" and 60) or (unit == "h" and 3600)
-			or (unit == "d" and 86400) or 0
-		secs = secs + tonumber(n) * mult
-	end
-	return secs
+	return util.parse_duration(t) or 0
 end
 
 -- {macs = {[ifname] = {mac, ...}}, ips = {[ifname] = {[mac] = ip}}} from one

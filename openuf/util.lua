@@ -115,6 +115,37 @@ function M.driver_of(ifname, read)
 	return uevent("/sys/class/net/" .. ifname .. "/device/uevent", "DRIVER", read)
 end
 
+-- An nft duration in seconds: "1m58s694ms" -> 118.694. Units nft prints: d h m
+-- s ms. nil for anything else.
+function M.parse_duration(s)
+	if type(s) ~= "string" or s == "" then return nil end
+	-- Summed in integer milliseconds and divided once, so "694ms" is exactly
+	-- the double 0.694 rather than 0.694 plus float noise.
+	local total, matched = 0, false
+	for n, unit in s:gmatch("(%d+)(%a+)") do
+		local k = ({d = 86400000, h = 3600000, m = 60000, s = 1000, ms = 1})[unit]
+		if not k then return nil end
+		total, matched = total + tonumber(n) * k, true
+	end
+	return matched and total / 1000 or nil
+end
+
+-- Write a file so a reader never sees half of it: tmp + rename, nothing moved
+-- into place when the write or the close failed (a full filesystem).
+-- prepare(tmp), when given, runs before anything is written: a secret's chmod.
+function M.write_atomic(path, content, prepare)
+	local tmp = path .. ".tmp"
+	local f = io.open(tmp, "w")
+	if not f then return false end
+	if prepare then prepare(tmp) end
+	local wrote = f:write(content)
+	local closed = f:close()
+	if not (wrote and closed) then os.remove(tmp); return false end
+	local ok = os.rename(tmp, path)
+	if not ok then os.remove(tmp) end
+	return ok and true or false
+end
+
 -- Run an nft script (`nft -f`) through exec, the caller's os.execute seam.
 -- quiet discards nft's error text. True when nft accepted all of it.
 function M.nft_run(script, exec, quiet)
