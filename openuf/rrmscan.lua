@@ -770,11 +770,14 @@ function M.harvest(blob)
 	local by_sta = {}
 	-- RCPI 221-254 is reserved and 255 "not measured" (802.11-2020 9.4.2.38):
 	-- read as levels they come out at 0..+17 dBm, louder than anything real.
-	-- Anything above -10 dBm is a misread too (a client writing signed dBm
-	-- that is not calibrated yet), and a steer must not trust it.
+	-- For a client writing signed dBm the same bytes are -35..-1, so -35 to
+	-- -10 is a strong neighbour and stays. Anything above -10 dBm is a misread
+	-- (a signed client not calibrated yet), and a steer must not trust it.
 	local function heard(sta, bssid, signal, raw)
 		if not (sta and bssid and signal) or bssid == "00:00:00:00:00:00" then return end
-		if (tonumber(raw) or 0) > 220 or signal > -10 then return end
+		if signal > -10 or ((tonumber(raw) or 0) > 220 and not M._rcpi_signed[sta:lower()]) then
+			return
+		end
 		sta, bssid = sta:lower(), bssid:lower()
 		by_sta[sta] = by_sta[sta] or {}
 		local prev = by_sta[sta][bssid]

@@ -801,6 +801,28 @@ return {
 		end
 	},
 	{
+		-- 226 is reserved as RCPI, and -30 dBm from a client writing signed dBm.
+		name = "rrmscan: a signed client's strong neighbour is kept, the reserved byte is not",
+		fn = function()
+			local signed, std = "00:00:5e:00:53:20", "00:00:5e:00:53:21"
+			local function report(sta, rcpi)
+				return '{ "beacon-report": {"address":"' .. sta .. '","channel":42,"rcpi":' .. rcpi
+					.. ',"bssid":"00:00:5e:00:53:01","rep-mode":0} }\n'
+			end
+			local orig = rrmscan._rcpi_signed
+			rrmscan._rcpi_signed = {[signed] = true, [std] = false}
+			local ok, err = pcall(function()
+				local _, _, by_sta = rrmscan.harvest(report(signed, 226) .. report(std, 226))
+				assert_eq(by_sta[signed]["00:00:5e:00:53:01"].signal, -30, "signed: -30 dBm")
+				assert_nil(by_sta[std], "standard: reserved, dropped")
+				_, _, by_sta = rrmscan.harvest(report(signed, 250))
+				assert_nil(by_sta[signed], "-6 dBm is a misread even for a signed client")
+			end)
+			rrmscan._rcpi_signed = orig
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "rrmscan: harvest calibrates each client on its own AP's report",
 		fn = function()
 			local function line(sta, last, rcpi)
