@@ -524,6 +524,9 @@
 			? 'Not used while usteer keeps the lists. Turn off “Use usteer” to use it.'
 			: 'Tell clients about the other access points, so they roam to the right one.',
 			toggle('neighbour_list', '1', ro || usteerOwns), { inline: true }));
+		// ubntproto.lua: heard only, nothing is sent. Saving restarts the daemon.
+		rows.push(row('Listen to UniFi access points', 'Learn their channels from the messages they send each other, so the neighbour lists update at once. Nothing is sent to them.',
+			toggle('ubnt_neighbours', '1', ro), { inline: true }));
 		for (const b of (r && r.bss) || []) {
 			const parts = [];
 			if (!b.rrm) parts.push('802.11k off');
