@@ -7076,6 +7076,48 @@ return {
 		end
 	},
 	{
+		name = "inform: a forgotten device never replays its old push, and a missing push is asked for",
+		fn = function()
+			local F, o_file, o_handle = os.tmpname(), inform.LAST_PUSH_FILE, inform.handle_response
+			inform.LAST_PUSH_FILE = F
+			local f = io.open(F, "w"); f:write('{"_type":"setparam"}'); f:close()
+			local ran = 0
+			inform.handle_response = function() ran = ran + 1 end
+			local ok, err = pcall(function()
+				assert_false(inform._replay_last_push({adopted = false}, {}, "test"), "not adopted: refused")
+				assert_eq(ran, 0, "nothing applied")
+				with_stderr(function()
+					assert_true(inform._replay_last_push({adopted = true}, {}, "test"), "adopted: replayed")
+				end)
+				assert_eq(ran, 1, "once")
+				os.remove(F)
+				assert_false(inform._replay_last_push({adopted = true}, {}, "test"), "no file after a reboot")
+			end)
+			inform.LAST_PUSH_FILE, inform.handle_response = o_file, o_handle
+			os.remove(F)
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: the first failover counts as a switch, for uplink_radio_aps",
+		fn = function()
+			local o_bh, o_state = inform._backhaul, inform._state
+			inform._backhaul = {tick = function(s) s.backhaul_mode = "wireless"; return "wireless" end}
+			inform._state = {save = function() end}
+			inform._replay_due = false
+			local st = {adopted = true, cfgversion = "abc"}
+			local ok, err = pcall(function()
+				with_stderr(function()
+					inform._backhaul_tick(st, {config = {uplink_radio_aps = false}})
+				end)
+				assert_true(inform._replay_due, "the push is applied again")
+				assert_eq(st.cfgversion, "", "and asked for")
+			end)
+			inform._backhaul, inform._state, inform._replay_due = o_bh, o_state, false
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: what clients report hearing is written for a monitor, only on a new report",
 		fn = function()
 			local F, saved = inform.STA_HEARD_FILE, inform._sta_reports
@@ -7244,13 +7286,13 @@ return {
 			local modes = {}
 			inform._chmod600 = function(p) modes[#modes + 1] = p end
 			local ok, err = pcall(function()
-				assert_false(inform._replay_last_push({}, {}), "nothing saved: nothing replayed")
+				assert_false(inform._replay_last_push({adopted = true}, {}), "nothing saved: nothing replayed")
 				local body = '{"_type":"setparam","system_cfg":"x=1"}'
 				assert_true(inform._save_last_push(body), "saved")
 				assert_eq(modes[1], inform.LAST_PUSH_FILE .. ".tmp", "owner-only before the body is written")
 				local got, replaying
 				inform.handle_response = function(s) got = s; replaying = inform._replaying; return true end
-				assert_true(inform._replay_last_push({}, {}), "replayed")
+				assert_true(inform._replay_last_push({adopted = true}, {}), "replayed")
 				assert_eq(got, body, "the very push")
 				assert_true(replaying, "flagged, so the replay does not save itself again")
 				assert_eq(inform._replaying, false, "and the flag is cleared after")

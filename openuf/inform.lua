@@ -4552,18 +4552,14 @@ M.BSSID_SETTLE_MAX = 120
 M._chmod600 = function(path) return os.execute("chmod 600 '" .. path:gsub("'", "'\\''") .. "'") end
 
 function M._save_last_push(json_str)
-	local tmp = M.LAST_PUSH_FILE .. ".tmp"
-	local f = io.open(tmp, "w")
-	if not f then return false end
-	M._chmod600(tmp)
-	f:write(json_str)
-	f:close()
-	return os.rename(tmp, M.LAST_PUSH_FILE) and true or false
+	return util.write_atomic(M.LAST_PUSH_FILE, json_str, M._chmod600)
 end
 
 -- Apply the saved push again, as if the controller had just sent it. Returns
 -- true when there was one and it ran.
 function M._replay_last_push(st, cfg, why)
+	-- Its mgmt_cfg would re-adopt a device its controller has forgotten.
+	if not (st and st.adopted) then return false end
 	local f = io.open(M.LAST_PUSH_FILE, "r")
 	if not f then return false end
 	local s = f:read("*a")
@@ -6710,6 +6706,8 @@ function M._forget_controller(prev, cfg)
 		if not ok then io.stderr:write("inform: forget: rate limits: " .. tostring(err) .. "\n") end
 	end
 	M._shape_obs = nil
+	-- It holds the old controller's keys, and a replay would bring them back.
+	os.remove(M.LAST_PUSH_FILE)
 	if M._staip then
 		pcall(M._staip.teardown)
 		M._staip_devs, M._staip_stas = nil, nil
@@ -7508,7 +7506,8 @@ end
 -- on a device whose push carried no uplink station.
 function M._backhaul_tick(st, cfg)
 	if not (M._backhaul and M._backhaul.tick) then return nil end
-	local before = st and st.backhaul_mode
+	-- Unset until the first failover, and that one is a switch too.
+	local before = st and st.backhaul_mode or "wired"
 	local mode = M._backhaul.tick(st, cfg, M._ucihelper, M._sysinfo, M._state)
 	-- A switch between wire and air needs the push applied again when it
 	-- depended on the uplink: with uplink_radio_aps off, which radio carries
@@ -8444,18 +8443,11 @@ function M._note_sta_reports(by_sta, now)
 end
 
 -- The same table in RAM for a monitor to read over SSH, rewritten only when a
--- report came in (tmp + rename: a reader never sees half a file). The
--- controller has no field for what a client hears.
+-- report came in. The controller has no field for what a client hears.
 M.STA_HEARD_FILE = "/tmp/openuf-heard.json"
 function M._write_sta_heard()
 	local ok, js = pcall(cjson.encode, M._sta_reports)
-	if not ok then return false end
-	local tmp = M.STA_HEARD_FILE .. ".tmp"
-	local f = io.open(tmp, "w")
-	if not f then return false end
-	f:write(js)
-	f:close()
-	return os.rename(tmp, M.STA_HEARD_FILE) and true or false
+	return ok and util.write_atomic(M.STA_HEARD_FILE, js)
 end
 
 -- One cycle of the client-assisted enrichment: keep the notification
@@ -9127,9 +9119,18 @@ function M._tick(st, cfg, ufhw, ctx)
 		ufuci.begin_pass()
 	end
 	ctx.last_mtime = M._reload_if_changed(st, cfg, ctx.last_mtime)
+	-- A reload outside a push (a parent's channel) has no cfg of its own.
+	if ufuci then
+		ufuci._handover_on = not (cfg and cfg.config and cfg.config.handover_before_reload == false)
+	end
 	if M._replay_due then
 		M._replay_due = false
-		pcall(M._replay_last_push, st, cfg)
+		-- The saved push is in /tmp: after a reboot only the controller has it.
+		local ok_r, ran = pcall(M._replay_last_push, st, cfg)
+		if not (ok_r and ran) and st.adopted and st.cfgversion ~= "" then
+			st.cfgversion = ""
+			M._state.save(st)
+		end
 	elseif ufuci and ufuci.bssid_misses_status then
 		-- WLANs a plugin needed the BSSID of came up after their push
 		-- (ucihelper._bssid_misses): one replay once all of them are up, or
