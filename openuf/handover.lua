@@ -65,7 +65,13 @@ function M.snapshot(cursor)
 	for name, s in pairs(type(all) == "table" and all or {}) do
 		local keys = {}
 		for k in pairs(s) do
-			if k == ".type" or k:sub(1, 1) ~= "." then keys[#keys + 1] = k end
+			-- openUF's own stamps are no netifd option (none is in its schema,
+			-- /usr/share/schema/wireless.*.json): changing one restarts nothing,
+			-- so it must not send a WLAN's clients away.
+			if k == ".type" or (k:sub(1, 1) ~= "." and k:sub(1, 7) ~= "openuf_"
+					and k ~= "loadbalance_maxsta") then
+				keys[#keys + 1] = k
+			end
 		end
 		table.sort(keys)
 		local parts = {}

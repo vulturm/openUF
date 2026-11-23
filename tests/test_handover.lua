@@ -145,4 +145,16 @@ return {
 			end)
 		end
 	},
+	{
+		name = "handover: an openUF stamp restarts nothing, so it is no change",
+		fn = function()
+			local b = handover.snapshot(cursor_of(base()))
+			local w = base()
+			w.guest5.openuf_roam_assist, w.guest2.openuf_band_steer = "-72", "1"
+			w.radio0.loadbalance_maxsta = "30"
+			assert_false(handover.changed(b, handover.snapshot(cursor_of(w))), "internal options only")
+			w.guest5.ssid = "other"
+			assert_true(handover.changed(b, handover.snapshot(cursor_of(w))), "a real option still is")
+		end
+	},
 }
