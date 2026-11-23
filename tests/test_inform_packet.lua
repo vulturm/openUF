@@ -7136,6 +7136,56 @@ return {
 		end
 	},
 	{
+		name = "inform: a routine sweep visits the siblings' channels, every fourth the whole band",
+		fn = function()
+			local o = {inform._ucihelper, inform._sysinfo.phy_frequencies, inform._nrlist._seen, inform._time,
+				inform._backhaul, inform._read_file}
+			local t = 10000
+			inform._time = function() return t end
+			inform._backhaul = nil
+			inform._read_file = function() return nil end
+			inform._ucihelper = {
+				get_radio_table = function() return {{name = "radio1", radio = "ng"}, {name = "radio0", radio = "na"}} end,
+				get_ifname_for_radio = function(r) return r == "radio1" and "phy1-ap0" or "phy0-ap0" end,
+			}
+			inform._sysinfo.phy_frequencies = function(ifn)
+				return ifn == "phy1-ap0" and {{freq = 2412}, {freq = 2437}, {freq = 2462}} or {{freq = 5180}, {freq = 5620}}
+			end
+			inform._nrlist._seen = {["00:00:5e:00:53:01"] = {ssid = "x", freq = 2437, channel = 6, at = t},
+				["00:00:5e:00:53:02"] = {ssid = "x", freq = 2412, channel = 1, at = t - 99999}}
+			os.remove(inform.SCAN_STAMP_FILE)
+			inform._scan_jobs = {}
+			local function sweep(ctx)
+				inform._scan_jobs = {}
+				t = t + 900
+				assert_true(inform._maybe_scan_neighbours({config = {neighbour_scan_interval = 900}}, ctx), "swept")
+				inform._nrlist._seen["00:00:5e:00:53:01"].at = t
+				return #inform._scan_jobs[1].freqs, #inform._scan_jobs[2].freqs
+			end
+			local ok, err = pcall(function()
+				local ctx = {}
+				inform._maybe_scan_neighbours({config = {neighbour_scan_interval = 900}}, ctx)
+				local g, a = sweep(ctx)
+				assert_eq(g, 3, "the first after a start: the whole band")
+				g, a = sweep(ctx)
+				assert_eq(g, 1, "then the live sibling's channel alone, not the expired one")
+				assert_eq(inform._scan_jobs[1].freqs[1].freq, 2437, "channel 6")
+				assert_eq(a, 2, "a band with no sibling is swept whole")
+				sweep(ctx); sweep(ctx)
+				g = sweep(ctx)
+				assert_eq(g, 3, "every fourth: the whole band, to find an AP that moved")
+				inform._scan_jobs = {}
+				assert_eq(inform._spectrum_scan({}, nil, "quick-scan"), 2, "a scan the controller asks for")
+				assert_eq(#inform._scan_jobs[1].freqs, 3, "is always whole")
+			end)
+			inform._ucihelper, inform._sysinfo.phy_frequencies, inform._nrlist._seen, inform._time,
+				inform._backhaul, inform._read_file = o[1], o[2], o[3], o[4], o[5], o[6]
+			inform._scan_jobs = {}
+			os.remove(inform.SCAN_STAMP_FILE)
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		-- The interval counted from each start, so restarts closer together
 		-- than it never swept, and the siblings aged out of the 802.11k lists.
 		name = "inform: the sweep interval outlives a restart, an overdue sweep waits SCAN_SETTLE",

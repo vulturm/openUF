@@ -7907,7 +7907,9 @@ end
 -- follows the command carries the result. A refused sweep still leaves the
 -- operating channel's survey, so the table is built either way (_force_scan
 -- has logged the refusal). Returns how many radios were swept.
-function M._spectrum_scan(cfg, band, who, skip_radio)
+-- only_freqs ({[MHz] = true}): just those of the radio's channels, or all of
+-- them when it has none of those, since then there is nothing to go back to.
+function M._spectrum_scan(cfg, band, who, skip_radio, only_freqs)
 	local ufuci = M._ucihelper
 	if not (ufuci and ufuci.get_radio_table and ufuci.get_ifname_for_radio) then return 0 end
 	local ok_r, radios = pcall(ufuci.get_radio_table, cfg and cfg.uap and cfg.uap.hwassign)
@@ -7938,6 +7940,13 @@ function M._spectrum_scan(cfg, band, who, skip_radio)
 					if M._sysinfo and M._sysinfo.phy_frequencies then
 						local ok_f, f = pcall(M._sysinfo.phy_frequencies, ifname)
 						if ok_f and type(f) == "table" and #f > 0 then freqs = f end
+					end
+					if freqs and only_freqs then
+						local kept = {}
+						for _, e in ipairs(freqs) do
+							if only_freqs[e.freq] then kept[#kept + 1] = e end
+						end
+						if #kept > 0 then freqs = kept end
 					end
 					local job = {radio = radio, ifname = ifname, who = who, freqs = freqs, next = 1}
 					if slot then M._scan_jobs[slot] = job else M._scan_jobs[#M._scan_jobs + 1] = job end
@@ -8056,13 +8065,13 @@ end
 -- radio's own channel is still heard passively, and that is the parent's.
 -- A scan the controller is ASKED for (Quick Scan, Spectrum Scan) still
 -- sweeps everything, as a UniFi AP's does.
-function M._scan_all_radios(cfg, st)
+function M._scan_all_radios(cfg, st, only_freqs)
 	local skip = nil
 	if M._backhaul and M._backhaul.uplink_radio then
 		local ok_u, r = pcall(M._backhaul.uplink_radio, st, M._ucihelper)
 		if ok_u then skip = r end
 	end
-	return M._spectrum_scan(cfg, nil, "11k-scan", skip)
+	return M._spectrum_scan(cfg, nil, "11k-scan", skip, only_freqs)
 end
 
 -- True when one of the pending 11k-scan due times has come. The times that
@@ -8108,6 +8117,12 @@ end
 -- start, for hostapd's ACS and the clients' reconnects.
 M.SCAN_STAMP_FILE = "/tmp/openuf-last-scan"
 M.SCAN_SETTLE     = 120
+-- A routine sweep goes to the channels of the site's other APs, as a UniFi AP
+-- does (wevent's rrm_scan over /proc/ui_neighbor/<band>_chans: on a U7, its
+-- siblings' channels and nothing else). UniFi APs tell each other those by
+-- multicast; openUF learns them from sweeps, so the first after a start and
+-- every SCAN_FULL_EVERY-th take the whole band, to find an AP that moved.
+M.SCAN_FULL_EVERY = 4
 
 local function scan_started(ctx, now)
 	ctx.last_scan = now
@@ -8145,7 +8160,10 @@ function M._maybe_scan_neighbours(cfg, ctx, st)
 	-- the start of one sweep to the start of the next, and a sweep takes
 	-- ~11 heartbeats across two radios.)
 	scan_started(ctx, now)
-	return M._scan_all_radios(cfg, st) > 0
+	ctx.scan_count = (ctx.scan_count or 0) + 1
+	local only = ctx.scan_count % M.SCAN_FULL_EVERY ~= 1 and M._nrlist and M._nrlist.sibling_freqs
+		and M._nrlist.sibling_freqs(now) or nil
+	return M._scan_all_radios(cfg, st, only) > 0
 end
 
 -- ─── 802.11r key-exchange socket (rrbguard.lua) ─────────────────────────────

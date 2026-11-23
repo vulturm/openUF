@@ -87,6 +87,19 @@ function M.expire(now)
 	end
 end
 
+-- {[MHz] = true} of the siblings still remembered, nil with none: the channels
+-- a routine sweep needs (inform._maybe_scan_neighbours).
+function M.sibling_freqs(now)
+	local out
+	for _, e in pairs(M._seen) do
+		if now - (e.at or 0) <= M.REMEMBER and tonumber(e.freq) then
+			out = out or {}
+			out[tonumber(e.freq)] = true
+		end
+	end
+	return out
+end
+
 -- Write M._seen to M.STORE (tmp + rename: a reader never sees half a file).
 function M.save()
 	local ok, js = pcall(M._encode, M._seen)
