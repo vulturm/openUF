@@ -23,8 +23,11 @@ end
 local function frame(msg_type, plaintext, n)
 	local ct = crypto.aes_cbc_encrypt(KEY, IV, plaintext)
 	n = n or #ct
+	local c = p.crc32(crypto.aes_cbc_decrypt_raw(KEY, IV, ct))
+	local crc = string.char(math.floor(c / 16777216), math.floor(c / 65536) % 256,
+		math.floor(c / 256) % 256, c % 256)
 	return string.char(0x22, 0x33, 0x44, 0x55, 2, 2, math.floor(n / 256), n % 256, 0, msg_type, 0, 3)
-		.. IV .. SENDER .. string.rep(string.char(0), 6) .. ct
+		.. IV .. SENDER .. string.char(0, 0) .. crc .. ct
 end
 
 return {
@@ -44,6 +47,14 @@ return {
 		end
 	},
 	{
+		name = "ubntproto: crc32 is zlib's",
+		fn = function()
+			assert_eq(p.crc32("123456789"), 0xCBF43926, "the standard check value")
+			assert_eq(p.crc32(""), 0, "empty")
+			assert_eq(p.crc32(string.rep(string.char(0), 4)), 0x2144DF1C, "zeros")
+		end
+	},
+	{
 		name = "ubntproto: anything else is ignored",
 		fn = function()
 			local good = frame(5, body(6, 2, {bss(1, 81, "home")}))
@@ -51,6 +62,9 @@ return {
 			assert_nil(p.decode("x" .. good:sub(2), KEY), "wrong magic")
 			assert_nil(p.decode(good:sub(1, -2), KEY), "truncated")
 			assert_nil(p.decode(good, "ffffffffffffffffffffffffffffffff"), "another site's key")
+			assert_nil(p.decode(good:sub(1, 36) .. string.rep("x", 4) .. good:sub(41), KEY), "a wrong CRC")
+			local last = good:byte(#good)
+			assert_nil(p.decode(good:sub(1, -2) .. string.char((last + 1) % 256), KEY), "a corrupt block")
 			assert_nil(p.parse_neighbours(body(6, 3, {bss(1, 81, "home")})), "unknown kind")
 			assert_nil(p.parse_neighbours(string.rep(string.char(0), 19) .. string.char(200)), "count past the end")
 			assert_eq(#p.parse_neighbours(body(1, 2, {bss(1, 131, "six")})).entries, 0, "6 GHz is left out")

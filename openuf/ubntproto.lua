@@ -9,7 +9,8 @@
 
 	  frame    0  22 33 44 55, 02 02
 	           6  ciphertext length (u16 BE), 8 message type (u16 BE)
-	          12  IV (16), 28 sender's serial (6), 34 not understood (6)
+	          12  IV (16), 28 sender's serial (6), 34 zero (2),
+	          36  CRC-32 of the plaintext, padding included (u32 BE)
 	          40  ciphertext
 	  type 5   0  serial asked or answered (6)
 	           6  band (u32), 10 channel (u32 BE), 14 kind (u32 BE)
@@ -47,12 +48,35 @@ local function mac(s, i)
 	return string.format("%02x:%02x:%02x:%02x:%02x:%02x", s:byte(i, i + 5))
 end
 
--- {type, sender, iv, ciphertext}, or nil for anything not of this shape.
+-- The CRC-32 zlib computes (polynomial 0xEDB88320), as an unsigned number.
+local crc_table
+function M.crc32(s)
+	local bit = util.bit()
+	if not crc_table then
+		crc_table = {}
+		for i = 0, 255 do
+			local c = i
+			for _ = 1, 8 do
+				if c % 2 == 1 then c = bit.bxor(bit.rshift(c, 1), 0xEDB88320)
+				else c = bit.rshift(c, 1) end
+			end
+			crc_table[i] = c
+		end
+	end
+	local c = bit.bnot(0)
+	for i = 1, #s do
+		c = bit.bxor(bit.rshift(c, 8), crc_table[bit.band(bit.bxor(c, s:byte(i)), 0xFF)])
+	end
+	return bit.bnot(c) % 4294967296
+end
+
+-- {type, sender, crc, iv, ciphertext}, or nil for anything not of this shape.
 function M.parse_frame(f)
 	if type(f) ~= "string" or #f <= M.HEADER_LEN or f:sub(1, 6) ~= MAGIC then return nil end
 	local n = u16(f, 7)
 	if n == 0 or n % 16 ~= 0 or #f ~= M.HEADER_LEN + n then return nil end
-	return {type = u16(f, 9), sender = mac(f, 29), iv = f:sub(13, 28), ciphertext = f:sub(41)}
+	return {type = u16(f, 9), sender = mac(f, 29), crc = u32(f, 37), iv = f:sub(13, 28),
+		ciphertext = f:sub(41)}
 end
 
 -- MHz of a 20 MHz channel from its global operating class. nil for 6 GHz, whose
@@ -91,7 +115,10 @@ function M.decode(frame, key_hex)
 	local f = M.parse_frame(frame)
 	if not (f and f.type == M.TYPE_NEIGHBOURS and M._crypto) then return nil end
 	local ok, p = pcall(M._crypto.aes_cbc_decrypt_raw, key_hex, f.iv, f.ciphertext)
-	local msg = ok and M.parse_neighbours(p) or nil
+	-- CBC has no integrity of its own: a corrupt frame, or one under another
+	-- key, decrypts to noise that could still look like a BSS list.
+	if not (ok and type(p) == "string" and M.crc32(p) == f.crc) then return nil end
+	local msg = M.parse_neighbours(p)
 	if msg then msg.sender = f.sender end
 	return msg
 end
