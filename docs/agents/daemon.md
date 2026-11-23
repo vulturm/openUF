@@ -69,7 +69,8 @@ Wireless provisioning is in [wireless.md](wireless.md); VLANs and the switch in
     `_applyguard_tick` is the one tick stage whose error is printed rather than swallowed.
   - `nrlist.lua` (`neighbour_list`, on): does nothing where `usteer.filter_wanted()` is true,
     because usteer writes the same hostapd list. Siblings come from `scan_table`'s `peer_mac`
-    via `observe` in `build_json`; `_deny_reloaded` brings the next sync forward because
+    via `observe` in `build_json`, and from `ubntproto.lua` (kept a day, since UniFi APs speak
+    only on a change); `_deny_reloaded` brings the next sync forward because
     hostapd forgets the list with the BSS. "No own neighbour entry" is both "802.11k off" and
     "BSS not up yet", so it is retried only for three minutes after a reload.
   - `devlogin.lua` (`device_login`): a uid-0 account from controller data. The trust flag is

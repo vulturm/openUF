@@ -50,7 +50,7 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 | `kmod-leds-gpio` | Only on a board whose device tree declares GPIO LEDs the image has no driver for (an AX3000T registers nothing but its radio LEDs, which are wired to nothing). `install.sh` adds it when it sees that situation |
 | `hostapd-utils` | `hostapd_cli` — immediate deauth of a just-blocked wireless client, client kick (Roaming Assistance), Minimum RSSI enforcement, disconnecting a guest whose portal authorization ended, and restarting a WLAN's beacon when its WiFi Blackout Schedule ends or guest selfrun (`off`) is over |
 | `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
-| `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `openuf/usteer.lua`. Roaming Assistant needs it too, for its view of which AP hears a client how loudly |
+| `usteer` | Only with `use_usteer = true`: ubus-based client-steering daemon, driven by `openuf/usteer.lua`, that then carries out Band Steering and Roaming Assistant. By default openUF does both itself (`clientmatch.lua`) |
 | rrb-unifi (d-malinowski's, **not** an openUF file or package) | 802.11r fast roaming between openUF and **genuine UniFi APs** (§ 6): a ucode translator daemon on a veth pair that converts hostapd's inter-AP key exchange to UniFi's framing, plus an openUF plugin that writes the matching 802.11r options. `setup.sh` offers to install it from that project's latest release (default yes); its own tool `rrb-unifi-setup` installs, verifies and uninstalls it, and brings `ucode-mod-socket` and `kmod-veth` with it. Without it openUF APs still roam among themselves |
 | `wpad-wolfssl` (or `wpad-openssl`, `wpad-mbedtls`, `wpad`) | Full hostapd build with 802.11k/v support — required for BSS Transition and Band Steering. Any of the full builds will do; `wpad-basic-*` lacks `bss_transition` entirely and errors with "unknown configuration item 'bss_transition'" |
 
@@ -1264,7 +1264,7 @@ Settings carried through from the controller:
 | PMF (802.11w) | `ieee80211w` (0 disabled / 1 optional / 2 required) |
 | Fast Roaming (802.11r) | `ieee80211r`. The controller carries **two** toggles — `ft.status` for the WLAN and `wpa3.ft.status` for the SAE akm alone (SAE pushes only). OpenWrt has one switch feeding hostapd's `key_mgmt`, and on `sae-mixed` it yields FT-PSK *and* FT-SAE together, so FT is enabled if **either** asks for it and a disagreement is logged. Both keys arrive `disabled` on a WPA3-only WLAN unless openUF advertises `radio_caps2` bit `0x2`, which it does wherever it advertises `0x1` |
 | BSS Transition (802.11v) | `bss_transition` — **needs a full `wpad` build** |
-| Band Steering | `usteer` config, not a hostapd option. On when any WLAN's Band Steering is on, or the AP's own setting is Prefer 5G. `usteer.local.band_steering_interval` is `0` when off and unset (the daemon's default) when on; `openuf_active` on the same section records whether openUF last started or stopped the daemon |
+| Band Steering | Not a hostapd option. On when any WLAN's Band Steering is on, or the AP's own setting is Prefer 5G: `openuf_band_steer` on the WLAN for `clientmatch.lua`. With `use_usteer = true`, `usteer.local.band_steering_interval` is `0` when off and unset (the daemon's default) when on; `openuf_active` on the same section records whether openUF last started or stopped the daemon |
 | Airtime Fairness (device panel) | Not UCI: `/sys/kernel/debug/ieee80211/phy*/airtime_flags`, `3` (TX+RX, the kernel default) for on and `0` for off, from `atf.mode`. Kept as `atf_enabled` in `state.json` and rewritten at every start, because debugfs resets to `3` on reboot. Forgetting the device puts `3` back. Depends on openUF advertising `wifi_caps` bit `0x20`, which it does when that debugfs file exists |
 | Roaming Assistant (per WLAN, 5 GHz) | `openuf_roam_assist=<dBm>` on the 5 GHz section (openUF's own marker, absent when off); enforced by openUF over hostapd's ubus, not by a hostapd option — see below |
 | Auto/Custom DTIM Period | `dtim_period` |
@@ -1600,10 +1600,13 @@ lua -e "dofile('/opt/openuf/ucihelper.lua').wlan_clear()"
 ```
 
 **Band Steering** has two switches in the controller: the per-WLAN toggle, and the AP's
-own setting in its device panel (Off / Prefer 5G / Balance). Either one turns steering on
-for the whole AP, because usteer is a single daemon. Balance is not supported (see
-Troubleshooting). Steering itself is `usteer`'s decision, not openUF's: openUF configures the
-daemon (`usteer.local.band_steering_interval`: `0` when off, unset so usteer's own default
+own setting in its device panel (Off / Prefer 5G / Balance). Balance is not supported (see
+Troubleshooting). By default openUF carries it out (`clientmatch.lua`): a 2.4 GHz client is asked
+about the higher bands' channels of the 802.11k list, and one it hears at -65 dBm or better gets
+an 802.11v request. It is never disconnected. `logread | grep "client steering"` shows each move.
+
+With `use_usteer = true` the decision is usteer's instead, for the whole AP, because usteer is a
+single daemon: openUF configures it (`usteer.local.band_steering_interval`: `0` when off, unset so usteer's own default
 applies when on) and forces 802.11k neighbour reports plus `bss_transition=1` onto every VAP,
 since usteer cannot work without them. If a client is not being steered, check
 `ubus call usteer get_clients` for a 5 GHz sighting of it and
@@ -1612,10 +1615,13 @@ since usteer cannot work without them. If a client is not being steered, check
 `BSS-TM-RESP <sta> status_code=0 target_bssid=<the 5 GHz BSSID>` in `logread`.
 
 **Roaming Assistant** (Settings → WiFi → *WLAN* → Advanced, 5 GHz) moves a weak client to
-an AP that hears it clearly better. It does nothing to a client that has no better AP to go
-to. It is per WLAN and runs in openUF (`openuf/roamassist.lua`), not in usteer, because
-usteer's own roam trigger can only be switched on for the whole device. For each client on a
-WLAN with it on:
+an AP that is clearly better. It does nothing to a client that has no better AP to go to. By
+default openUF carries it out (`clientmatch.lua`) from what the client itself reports: under the
+WLAN's threshold it is measured on the neighbours' channels and asked by 802.11v to move to a BSS
+it hears `roam_assist_diff_db` louder, without a disassociation.
+
+With `use_usteer = true` it runs in `openuf/roamassist.lua`, because usteer's own roam trigger
+can only be switched on for the whole device. For each client on a WLAN with it on:
 
 1. Its signal has been below the WLAN's threshold for 30 s, it has been associated for at
    least 60 s, and it was not moved in the last 120 s.
@@ -1626,8 +1632,7 @@ WLAN with it on:
    10 s later is disassociated, with a 30 s ban on the weak BSS only, so it cannot bounce
    straight back. That is also how a client without 802.11v gets moved.
 
-It needs `usteer` running on every AP (openUF starts it whenever Roaming Assistant or Band
-Steering is on) and a full `wpad` build. Each action is logged: `logread | grep roamassist`.
+That mode needs `usteer` running on every AP and a full `wpad` build. Each action is logged: `logread | grep roamassist`.
 usteer's readings are up to two minutes old, so a client that has just walked away can be
 pointed at an AP that is no longer better; the disassociation then lets it pick for itself,
 which is where a UniFi AP would leave it too. Verified on real hardware upstream (a client at
@@ -2161,10 +2166,11 @@ it cannot act if the daemon itself hangs.
 ask the AP which other APs it could move to. openUF now answers with the site's other BSSes on
 that SSID — siblings it has scanned (other openUF APs and genuine UniFi APs) and its own BSS on
 the other band — instead of with itself alone. `ubus call hostapd.<ifname> rrm_nr_list` shows
-the list. It does nothing while Band Steering or Roaming Assistant is on, because openUF then
-runs usteer and usteer maintains the same list itself (with OpenWrt siblings only). A sibling is
-remembered for an hour after it was last scanned, so the list fills as scans happen
-(`neighbour_scan_interval`, the nightly `11k-scan`, client beacon reports).
+the list. It does nothing with `use_usteer = true`, because usteer then maintains the same list
+itself (with OpenWrt siblings only). A sibling is remembered for an hour after it was last
+scanned, so the list fills as scans happen (`neighbour_scan_interval`, the nightly `11k-scan`,
+client beacon reports). One learned from UniFi APs' own neighbour messages (`ubnt_neighbours`,
+on; listening only) is remembered for a day.
 
 **Device SSH Authentication (`device_login = true`).** Creates the login set under Settings →
 System → Advanced → Device Authentication, with the password the controller pushes (as a hash),

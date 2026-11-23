@@ -19,8 +19,11 @@ WLAN or a radio (`usteer`, `roamassist`, `shaper`, `minrssi`, `loadbalance`, `wl
   radio's basic rates (-EINVAL, ath9k and ath10k), which is why the basic set stays mandatory
   rates; a `wifi reload` drops every mask, so it is reapplied per ifindex each heartbeat. Before,
   the most permissive floor won and a guest SSID's 5.5 put the whole 2.4 GHz radio at 5.5.
-- **Roaming Assistant and Band Steering share usteer but not its decision.** `usteer.lua`
-  writes `band_steering_interval` (0 = off; the daemon default steers) and never the inert
+- **Band Steering and Roaming Assistant are `clientmatch.lua`'s unless `use_usteer` is on**
+  (`inform._local_steering_gate`). usteer rewrites every 802.11k list with usteer APs only, which
+  hides genuine UniFi APs. Never run both: two steerers push a client back and forth. Never steer
+  to a lower band, because 2.4 GHz nearly always reads louder than 5 GHz from the same spot.
+- **With `use_usteer`, the two share usteer but not its decision.** `usteer.lua` writes `band_steering_interval` (0 = off; the daemon default steers) and never the inert
   `band_steering_threshold`; `roamassist.lua` reads usteer's cross-AP table and sends its own
   BTM request and disassociation, per WLAN, only toward an AP that hears the client
   `roam_assist_diff_db` louder. `usteer.set_enabled(steering, cfg, roam_assist)` runs the

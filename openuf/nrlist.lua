@@ -24,10 +24,9 @@
 	restarts, so it is set again after every `wifi reload` and on a slow
 	timer.
 
-	Where usteer runs, this module does nothing: usteer writes the same list
-	on its own schedule and the two would overwrite each other for ever. That
-	means a site with Band Steering or Roaming Assistant on keeps usteer's
-	list (OpenWrt siblings only). Stated, not papered over.
+	Where usteer runs (conf.lua use_usteer), this module does nothing: usteer
+	writes the same list on its own schedule and the two would overwrite each
+	other for ever. Such a site keeps usteer's list (OpenWrt siblings only).
 
 	A BSS whose 802.11k is off has no own entry (hostapd creates it only with
 	rrm_neighbor_report), and that is the gate: no own entry, no list.

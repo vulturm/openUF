@@ -28,7 +28,12 @@ openuf/
   rrmscan.lua       802.11k beacon-report neighbour enrichment; the hostapd event collector
                     (ubus subscribe + control-socket monitors + `bridge monitor fdb`) that
                     assoctrack reads too
-  satisfaction.lua  WiFi Experience: the UniFi firmware's formula (libubnt 4.0.15)
+  satisfaction.lua  WiFi Experience: the UniFi firmware's formula (libubnt 4.0.15, the phy
+                    term from a U7's 8.8.14)
+  clientmatch.lua   steering by what the client hears: Band Steering, Roaming Assistant,
+                    client_steering (usteer only with use_usteer)
+  staip.lua         each client's IPv4 from its ARP frames, a small nft set on the VAPs
+  ubntproto.lua     hears UniFi APs' neighbour multicast (UDP 48000); never sends
   assoctrack.lua    AirView Connectivity stages and Roaming reports as notif informs
   minrssi.lua       Minimum RSSI: refusal margin, 30 s hold before the kick
   loadbalance.lua   Load balance: the most idle stations above a radio's cap
