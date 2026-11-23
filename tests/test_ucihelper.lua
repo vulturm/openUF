@@ -1397,6 +1397,39 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: apply_rate_masks reads a radio's band from hwmode, and skips 6 GHz",
+		fn = function()
+			with_ucihelper(function(_, cmds)
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "wifi-device")
+				c:set("wireless", "radio0", "hwmode", "11g")
+				c:set("wireless", "radio2", "wifi-device")
+				c:set("wireless", "radio2", "band", "6g")
+				for name, dev in pairs({g = "radio0", six = "radio2"}) do
+					c:set("wireless", name, "wifi-iface")
+					c:set("wireless", name, "device", dev)
+					c:set("wireless", name, "openuf_minrate", "11000")
+				end
+				local o_ifs, o_read = ucihelper.ifname_for_section, ucihelper._read_file
+				ucihelper.ifname_for_section = function(sec) return ({g = "phy0-ap0", six = "phy2-ap0"})[sec] end
+				ucihelper._read_file = function(path)
+					if path:match("/ifindex$") then return "7\n" end
+					return o_read(path)
+				end
+				ucihelper._masks, ucihelper._mask_failed = {}, {}
+				local ok, err = pcall(function()
+					assert_eq(ucihelper.apply_rate_masks(), 1, "the 2.4 GHz WLAN alone")
+					local all = table.concat(cmds, "\n")
+					assert_contains(all, "iw dev phy0-ap0 set bitrates legacy-2.4 11 ", "the 2.4 GHz selector, CCK included")
+					assert_nil(all:find("phy2-ap0", 1, true), "no legacy mask on 6 GHz")
+				end)
+				ucihelper.ifname_for_section, ucihelper._read_file = o_ifs, o_read
+				ucihelper._masks, ucihelper._mask_failed = {}, {}
+				if not ok then error(err, 0) end
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_rate_masks sets each stamped WLAN's mask once per netdev, and clears it after",
 		fn = function()
 			with_ucihelper(function(db, cmds)

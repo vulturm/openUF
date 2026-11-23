@@ -3951,7 +3951,12 @@ function M.apply_rate_masks()
 		local floor = tonumber(s.openuf_minrate)
 		local name = s[".name"]
 		if not (floor and name and s.device) or s.disabled == "1" then return end
-		local band = cursor:get("wireless", s.device, "band")
+		-- `hwmode` on an older config, and no legacy selector exists for 6 GHz.
+		local dev_band = cursor:get("wireless", s.device, "band")
+		if dev_band == "6g" then return end
+		local radio = band_for_device({band = dev_band, channel = cursor:get("wireless", s.device, "channel"),
+			hwmode = cursor:get("wireless", s.device, "hwmode")})
+		local band = radio == "ng" and "2g" or "5g"
 		local cck = cursor:get("wireless", s.device, "legacy_rates") ~= "0"
 		local basic = cursor:get("wireless", s.device, "basic_rate")
 		if type(basic) == "string" then basic = {basic} end
