@@ -267,6 +267,11 @@ config = {
 	-- this AP. Changing it asks the controller for a fresh push, which applies it.
 	controller_steering = true,
 
+	-- Listen to the neighbour messages genuine UniFi APs send each other
+	-- (ubntproto.lua), so the 802.11k lists follow a sibling's channel at once
+	-- and name siblings on a band this AP cannot scan. Nothing is ever sent.
+	ubnt_neighbours = true,
+
 	-- Carry out those two settings with usteer and roamassist.lua instead. For
 	-- a site of OpenWrt APs only, or with clients that have no 802.11k: usteer
 	-- compares what the APs hear, and Roaming Assistant then also disconnects.

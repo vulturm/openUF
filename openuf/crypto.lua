@@ -166,20 +166,24 @@ end
 -- ciphertext: binary string
 -- returns: plaintext binary string (PKCS#7 stripped)
 function M.aes_cbc_decrypt(key_hex, iv, ciphertext)
+	return pkcs7_unpad(M.aes_cbc_decrypt_raw(key_hex, iv, ciphertext))
+end
+
+-- The same with the padding left alone: UniFi's AP-to-AP messages zero-fill.
+function M.aes_cbc_decrypt_raw(key_hex, iv, ciphertext)
 	local key = M.hex_to_bin(key_hex)
 	if _ossl_ok then
 		local ctx = _ossl.cipher.get("aes-128-cbc"):new(false, key, iv)
 		ctx:padding(false)
-		return pkcs7_unpad(ctx:update(ciphertext) .. ctx:final())
+		return ctx:update(ciphertext) .. ctx:final()
 	elseif _crypto_ok then
 		local ok, result = pcall(_lcrypto.decrypt, "aes-128-cbc", ciphertext, key, iv, true)
 		if not ok then
 			result = _lcrypto.decrypt("aes-128-cbc", ciphertext, key, iv)
 		end
-		return pkcs7_unpad(result)
-	else
-		return pkcs7_unpad(_fallback().cbc_decrypt(key, iv, ciphertext))
+		return result
 	end
+	return _fallback().cbc_decrypt(key, iv, ciphertext)
 end
 
 -- AES-128-GCM encrypt (requires luacrypto with AEAD/GCM support)

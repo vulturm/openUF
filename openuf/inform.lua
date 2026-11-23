@@ -58,6 +58,7 @@ local ftpeer    = _require_sibling("ftpeer")
 local airtime   = _require_sibling("airtime")
 local mcsnoop   = _require_sibling("mcsnoop")
 local staip     = _require_sibling("staip")
+local ubntproto = _require_sibling("ubntproto")
 local backhaul  = _require_sibling("backhaul")
 local meshvlan  = _require_sibling("meshvlan")
 local assoctrack = _require_sibling("assoctrack")
@@ -113,6 +114,8 @@ M._ftpeer     = ftpeer
 M._airtime    = airtime
 M._mcsnoop    = mcsnoop
 M._staip      = staip
+M._ubntproto  = ubntproto
+if ubntproto then ubntproto._crypto = crypto end
 M._backhaul   = backhaul
 M._meshvlan   = meshvlan
 M._assoctrack = assoctrack
@@ -5148,6 +5151,7 @@ function M.handle_response(json_str, st, cfg)
 		M._report_dropped_keys("mgmt_cfg", mgmt_raw, RECOGNIZED_MGMT_CFG)
 
 		local sys_raw = resp.system_cfg
+		pcall(M._ubntproto_note, st, sys_raw)
 		-- Set while this push is guarded (applyguard.lua): the radios that
 		-- were up before it touched anything.
 		local guard_radios = nil
@@ -6708,6 +6712,8 @@ function M._forget_controller(prev, cfg)
 	M._shape_obs = nil
 	-- It holds the old controller's keys, and a replay would bring them back.
 	os.remove(M.LAST_PUSH_FILE)
+	if M._ubntproto then pcall(M._ubntproto.close) end
+	M._ubnt_push_read = nil
 	if M._staip then
 		pcall(M._staip.teardown)
 		M._staip_devs, M._staip_stas = nil, nil
@@ -7667,6 +7673,55 @@ function M._hairpin_resync()
 	if now < M._hairpin_next then return 0 end
 	M._hairpin_next = now + M.HAIRPIN_CHECK_INTERVAL
 	return M._l2guard.reconcile_hairpin()
+end
+
+-- unifi.key and unifi.mcip from a push's system_cfg, into the state: after a
+-- reboot the daemon listens before the controller pushes again. True when
+-- either changed.
+function M._ubntproto_note(st, sys_raw)
+	if type(sys_raw) ~= "string" then return false end
+	local key = sys_raw:match("%f[%w]unifi%.key=(%x+)")
+	local group = sys_raw:match("%f[%w]unifi%.mcip=([%d%.]+)")
+	local first = tonumber(group and group:match("^(%d+)%."))
+	if not (key and #key == 32 and first and first >= 224 and first <= 239) then return false end
+	if st.ubnt_key == key and st.ubnt_mcip == group then return false end
+	st.ubnt_key, st.ubnt_mcip = key, group
+	M._state.save(st)
+	return true
+end
+
+-- Each heartbeat: what the site's UniFi APs told each other (ubntproto.lua), into
+-- the 802.11k lists. Listening only. A device adopted before this has the key
+-- in the saved push, until the controller next sends one.
+function M._ubntproto_tick(st, cfg)
+	local p = M._ubntproto
+	if not p then return 0 end
+	if not (st and st.adopted) or (cfg and cfg.config and cfg.config.ubnt_neighbours == false) then
+		p.close()
+		return 0
+	end
+	if not st.ubnt_key and not M._ubnt_push_read then
+		M._ubnt_push_read = true
+		local f = io.open(M.LAST_PUSH_FILE, "r")
+		if f then
+			local ok, t = pcall(cjson.decode, f:read("*a") or "")
+			f:close()
+			if ok and type(t) == "table" then M._ubntproto_note(st, t.system_cfg) end
+		end
+	end
+	if not (st.ubnt_key and st.ubnt_mcip and type(st.ip) == "string") or st.ip == "0.0.0.0" then return 0 end
+	if not p.ensure(st.ip, st.ubnt_mcip) then return 0 end
+	local own = type(st.mac) == "string" and st.mac:lower() or nil
+	local now = M._time()
+	return p.drain(st.ubnt_key, function(msg)
+		if msg.sender == own or not M._nrlist then return end
+		for _, e in ipairs(msg.entries) do
+			local old = M._nrlist._seen[e.bssid]
+			M._nrlist.observe({peer_mac = msg.sender, bssid = e.bssid, essid = e.essid,
+				channel = e.channel, freq = e.freq}, now, p.KEEP)
+			if not old or old.freq ~= e.freq then M._nrlist_next = 0 end
+		end
+	end)
 end
 
 -- Once a minute: the client-address table (staip.lua), on the VAPs of the
@@ -9202,6 +9257,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._hairpin_resync)
 	pcall(M._mcsnoop_resync, cfg)
 	pcall(M._staip_resync)
+	pcall(M._ubntproto_tick, st, cfg)
 	pcall(M._usteer_filter_resync)
 	pcall(M._usteer_watchdog_tick)
 	pcall(M._block_resync, st)

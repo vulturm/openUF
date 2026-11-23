@@ -11,6 +11,7 @@ local inform = dofile("openuf/inform.lua")
 inform._staip._exec = function() return 0 end
 inform._staip._popen = function() return "" end
 inform.STA_HEARD_FILE = os.tmpname()
+inform._ubntproto = nil  -- no multicast socket from a unit test
 -- The sweep's stamp goes to a scratch file; each test that reads it removes it.
 inform.SCAN_STAMP_FILE = os.tmpname()
 os.remove(inform.SCAN_STAMP_FILE)
@@ -7073,6 +7074,44 @@ return {
 			-- A pair's own status line is not the device's.
 			assert_nil(inform._parse_bandsteering_system_cfg(pairs_blk),
 				"bandsteering.<n>.status is not bandsteering.status")
+		end
+	},
+	{
+		name = "inform: UniFi's neighbour messages reach the 802.11k lists, on an adopted AP only",
+		fn = function()
+			local o = {inform._ubntproto, inform._nrlist._seen, inform._nrlist_next, inform._state, inform._time}
+			local closed, drained = 0, 0
+			local MSG = {sender = "00:00:5e:00:53:10", entries = {{bssid = "00:00:5e:00:53:01", essid = "home",
+				channel = 124, freq = 5620}}}
+			inform._ubntproto = {KEEP = 86400, close = function() closed = closed + 1 end,
+				ensure = function() return true end,
+				drain = function(_, cb) drained = drained + 1; cb(MSG); return 1 end}
+			inform._nrlist._seen, inform._nrlist_next = {}, 999
+			inform._state = {save = function() end}
+			inform._time = function() return 5000 end
+			local ok, err = pcall(function()
+				local st = {adopted = true, ip = "192.0.2.2", mac = "00:00:5e:00:53:99"}
+				assert_true(inform._ubntproto_note(st, "unifi.key=000102030405060708090a0b0c0d0e0f\nunifi.mcip=239.254.127.63\n"), "learned")
+				assert_false(inform._ubntproto_note(st, "unifi.key=000102030405060708090a0b0c0d0e0f\nunifi.mcip=239.254.127.63\n"), "unchanged")
+				assert_false(inform._ubntproto_note({}, "unifi.key=abc\nunifi.mcip=10.0.0.1\n"), "malformed: ignored")
+				assert_eq(inform._ubntproto_tick(st, {config = {}}), 1, "one message")
+				local e = inform._nrlist._seen["00:00:5e:00:53:01"]
+				assert_eq(e.channel, 124, "the sibling's channel")
+				assert_eq(e.keep, 86400, "kept longer than a scan's sighting")
+				assert_eq(inform._nrlist_next, 0, "the lists are rewritten at once")
+				inform._ubntproto_tick({adopted = false}, {config = {}})
+				assert_eq(closed, 1, "a forgotten AP stops listening")
+				inform._ubntproto_tick(st, {config = {ubnt_neighbours = false}})
+				assert_eq(closed, 2, "and so does one with the option off")
+				assert_eq(drained, 1, "neither read anything")
+				MSG.sender = st.mac
+				inform._nrlist._seen = {}
+				inform._ubntproto_tick(st, {config = {}})
+				assert_nil(next(inform._nrlist._seen), "its own message is no neighbour")
+			end)
+			inform._ubntproto, inform._nrlist._seen, inform._nrlist_next, inform._state, inform._time =
+				o[1], o[2], o[3], o[4], o[5]
+			if not ok then error(err, 0) end
 		end
 	},
 	{

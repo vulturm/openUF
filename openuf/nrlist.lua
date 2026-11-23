@@ -67,23 +67,30 @@ M._seen = {}
 
 -- ─── What is known ───────────────────────────────────────────────────────────
 
+local function alive(e, now)
+	return now - (e.at or 0) <= (tonumber(e.keep) or M.REMEMBER)
+end
+
 -- One scan_table entry. Only a sibling (peer_mac set) with an SSID, a BSSID
--- and a channel is remembered.
-function M.observe(net, now)
+-- and a channel is remembered. keep: seconds instead of REMEMBER, for a source
+-- that speaks only on a change (ubntproto.lua); a later sighting keeps it.
+function M.observe(net, now, keep)
 	if type(net) ~= "table" or not net.peer_mac then return false end
 	local bssid = type(net.bssid) == "string" and net.bssid:lower() or nil
 	if not (util.is_mac(bssid) and type(net.essid) == "string" and net.essid ~= ""
 	   and tonumber(net.channel) and tonumber(net.freq)) then
 		return false
 	end
+	local old = M._seen[bssid]
 	M._seen[bssid] = {ssid = net.essid, freq = tonumber(net.freq),
-		channel = tonumber(net.channel), at = now}
+		channel = tonumber(net.channel), at = now,
+		keep = keep or (old and alive(old, now) and old.keep) or nil}
 	return true
 end
 
 function M.expire(now)
 	for bssid, e in pairs(M._seen) do
-		if now - (e.at or 0) > M.REMEMBER then M._seen[bssid] = nil end
+		if not alive(e, now) then M._seen[bssid] = nil end
 	end
 end
 
@@ -92,7 +99,7 @@ end
 function M.sibling_freqs(now)
 	local out
 	for _, e in pairs(M._seen) do
-		if now - (e.at or 0) <= M.REMEMBER and tonumber(e.freq) then
+		if alive(e, now) and tonumber(e.freq) then
 			out = out or {}
 			out[tonumber(e.freq)] = true
 		end
@@ -118,9 +125,9 @@ function M.load(now)
 	for bssid, e in pairs(type(t) == "table" and t or {}) do
 		if util.is_mac(bssid) and type(e) == "table" and type(e.ssid) == "string"
 		   and tonumber(e.freq) and tonumber(e.channel) and tonumber(e.at)
-		   and now - tonumber(e.at) <= M.REMEMBER and not M._seen[bssid:lower()] then
+		   and alive(e, now) and not M._seen[bssid:lower()] then
 			M._seen[bssid:lower()] = {ssid = e.ssid, freq = tonumber(e.freq),
-				channel = tonumber(e.channel), at = tonumber(e.at)}
+				channel = tonumber(e.channel), at = tonumber(e.at), keep = tonumber(e.keep)}
 			n = n + 1
 		end
 	end
@@ -184,7 +191,7 @@ end
 function M.neighbours_for(ssid, own, own_other, now)
 	local by_bssid = {}
 	for bssid, e in pairs(M._seen) do
-		if e.ssid == ssid and not (own and own[bssid]) and now - (e.at or 0) <= M.REMEMBER then
+		if e.ssid == ssid and not (own and own[bssid]) and alive(e, now) then
 			local el = M.element(bssid, e.freq, e.channel)
 			if el then by_bssid[bssid] = {bssid, ssid, el} end
 		end

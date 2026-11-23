@@ -169,6 +169,7 @@ local test_files = {
 	"tests/test_rrmscan.lua",
 	"tests/test_assoctrack.lua",
 	"tests/test_staip.lua",
+	"tests/test_ubntproto.lua",
 	"tests/test_satisfaction.lua",
 	"tests/test_minrssi.lua",
 	"tests/test_stun.lua",
