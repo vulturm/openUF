@@ -115,6 +115,11 @@ $l"
 else
 	echo "  neither apk nor opkg"; exit 1
 fi
+# An empty list would make the package manager act on every package.
+if [ -z "$inst" ]; then
+	echo "  packages    none of the set is installed"
+	exit 0
+fi
 up=$(printf "%s\n" "$up" | sed "/^$/d")
 if [ -z "$up" ]; then
 	echo "  packages    all current ($(echo $inst | wc -w) installed from the set)"
